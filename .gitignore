@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+*.log
+logs/
+coverage/
+.DS_Store
+.idea/
+.vscode/
+*.tsbuildinfo
+
+# Local env files
+.env.local
+.env
+.env.example
+
+# Ignore package-lock.json to avoid conflicts between different environments
+package-lock.json
+*-lock.json
