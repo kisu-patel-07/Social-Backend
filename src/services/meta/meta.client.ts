@@ -104,14 +104,19 @@ class MetaClient {
     }
   }
 
-  /** Subscribe a Page to webhook fields so events are delivered to our app. */
+  /**
+   * Subscribe a Page to webhook fields so events are delivered to our app.
+   * Only valid Page-object field names are allowed here: FB post comments are
+   * covered by `feed`; Instagram comment events are delivered via the app-level
+   * Instagram webhook subscription configured in the Meta dashboard.
+   */
   async subscribePageWebhooks(pageId: string, pageAccessToken: string): Promise<void> {
     try {
       await this.http.post(`/${pageId}/subscribed_apps`, null, {
         params: {
           access_token: pageAccessToken,
           appsecret_proof: this.appSecretProof(pageAccessToken),
-          subscribed_fields: 'feed,comments,messages,mentions',
+          subscribed_fields: 'feed,mention,messages,messaging_postbacks',
         },
       });
     } catch (error) {

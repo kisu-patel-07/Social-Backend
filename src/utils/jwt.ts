@@ -71,3 +71,33 @@ export function verifyEmailToken(
   }
   return decoded;
 }
+
+/**
+ * OAuth `state` token. The Meta callback is a top-level browser redirect with
+ * no Authorization header, so we carry the initiating user's identity in a
+ * short-lived signed state value and verify it on the callback.
+ */
+interface StateTokenPayload extends BaseJwtPayload {
+  sub: string; // userId
+  ws: string; // workspaceId
+  type: 'oauth_state';
+}
+
+export function signStateToken(userId: string, workspaceId: string): string {
+  return jwt.sign({ sub: userId, ws: workspaceId, type: 'oauth_state' }, env.JWT_EMAIL_SECRET, {
+    expiresIn: '15m',
+  });
+}
+
+export function verifyStateToken(token: string): { userId: string; workspaceId: string } {
+  let decoded: StateTokenPayload;
+  try {
+    decoded = jwt.verify(token, env.JWT_EMAIL_SECRET) as StateTokenPayload;
+  } catch {
+    throw new UnauthorizedError('Invalid or expired OAuth state');
+  }
+  if (decoded.type !== 'oauth_state') {
+    throw new UnauthorizedError('Invalid OAuth state');
+  }
+  return { userId: decoded.sub, workspaceId: decoded.ws };
+}

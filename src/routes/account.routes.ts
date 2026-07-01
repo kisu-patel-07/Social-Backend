@@ -21,6 +21,11 @@ router.get('/', accountController.list);
 router.get('/oauth/url', validate(startOAuthSchema), accountController.startOAuth);
 router.post('/connect', validate(connectAccountSchema), accountController.connect);
 router.get('/:id', validate(accountIdParamSchema), accountController.getById);
+router.post(
+  '/:id/subscribe-webhook',
+  validate(accountIdParamSchema),
+  accountController.retryWebhook
+);
 router.delete('/:id', validate(accountIdParamSchema), accountController.disconnect);
 
 export default router;

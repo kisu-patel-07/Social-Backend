@@ -1,10 +1,11 @@
 import { Types } from 'mongoose';
 import { ActivityAction, NotificationType, Platform } from '../constants';
+import { logger } from '../config/logger';
 import { ISocialAccount } from '../models/socialAccount.model';
-import { socialAccountRepository } from '../repositories';
+import { socialAccountRepository, userRepository } from '../repositories';
 import { AuthUser } from '../types/auth.types';
 import { BadRequestError, ConflictError, NotFoundError } from '../utils/AppError';
-import { generateRandomToken } from '../utils/password';
+import { signStateToken, verifyStateToken } from '../utils/jwt';
 import { activityService } from './activity.service';
 import { analyticsService } from './analytics.service';
 import { metaClient, metaService } from './meta';
@@ -20,15 +21,68 @@ interface ConnectAccountParams {
 }
 
 class AccountService {
-  /** Build the Meta OAuth URL the frontend should redirect the user to. */
-  getOAuthUrl(): { url: string; state: string } {
-    const state = generateRandomToken(16);
+  /**
+   * Build the Meta OAuth URL the frontend should redirect the user to.
+   * The `state` is a short-lived signed token carrying the initiating user's
+   * identity, so the (unauthenticated) callback can attribute the connection.
+   */
+  getOAuthUrl(user: AuthUser): { url: string; state: string } {
+    const state = signStateToken(user.id, user.workspaceId);
     return { url: metaService.buildOAuthUrl(state), state };
   }
 
   /** Resolve connectable Pages/IG accounts from an OAuth callback code. */
   async resolveConnectable(code: string) {
     return metaService.resolveConnectableAccounts(code);
+  }
+
+  /**
+   * Handle the Meta OAuth callback end-to-end: verify the signed state to
+   * recover the user, exchange the code, and persist every connectable
+   * Page / IG account. Tokens never leave the backend. Returns how many were
+   * newly connected (duplicates are skipped, not errors).
+   */
+  async connectFromCallback(
+    state: string,
+    code: string
+  ): Promise<{ connected: number; total: number }> {
+    const { userId, workspaceId } = verifyStateToken(state);
+    const userDoc = await userRepository.findById(userId);
+    if (!userDoc) throw new NotFoundError('User not found');
+
+    const authUser: AuthUser = {
+      id: userId,
+      workspaceId,
+      role: userDoc.role,
+      email: userDoc.email,
+    };
+
+    const connectable = await metaService.resolveConnectableAccounts(code);
+    let connected = 0;
+
+    for (const acc of connectable) {
+      try {
+        await this.connect(authUser, {
+          platform: acc.platform,
+          pageId: acc.pageId,
+          instagramBusinessId: acc.instagramBusinessId,
+          name: acc.name,
+          username: acc.username,
+          accessToken: acc.pageAccessToken,
+        });
+        connected += 1;
+      } catch (error) {
+        // Already-connected accounts (ConflictError) and per-account failures
+        // shouldn't abort the whole callback — log and continue.
+        logger.warn('Skipped connecting an account during OAuth callback', {
+          platform: acc.platform,
+          name: acc.name,
+          reason: (error as Error).message,
+        });
+      }
+    }
+
+    return { connected, total: connectable.length };
   }
 
   list(workspaceId: string): Promise<ISocialAccount[]> {
@@ -74,17 +128,11 @@ class AccountService {
       connectedBy: new Types.ObjectId(user.id),
     });
 
-    // Best-effort webhook subscription; surfaces as lastError if it fails.
+    // Best-effort webhook subscription; surfaces the real reason as lastError.
     if (params.pageId) {
-      try {
-        await metaClient.subscribePageWebhooks(params.pageId, params.accessToken);
-        await socialAccountRepository.updateById(account.id, { isWebhookSubscribed: true });
-        account.isWebhookSubscribed = true;
-      } catch {
-        await socialAccountRepository.updateById(account.id, {
-          lastError: 'Webhook subscription failed — automations may not trigger.',
-        });
-      }
+      await this.trySubscribeWebhook(account.id, params.pageId, params.accessToken);
+      const fresh = await socialAccountRepository.findById(account.id);
+      if (fresh) account.isWebhookSubscribed = fresh.isWebhookSubscribed;
     }
 
     await Promise.all([
@@ -108,6 +156,48 @@ class AccountService {
     ]);
 
     return account;
+  }
+
+  /**
+   * Attempt to subscribe a page to webhooks, recording success/failure on the
+   * account. The real Meta error is stored in `lastError` so it's debuggable
+   * from the UI instead of a generic message.
+   */
+  private async trySubscribeWebhook(
+    accountId: string,
+    pageId: string,
+    accessToken: string
+  ): Promise<boolean> {
+    try {
+      await metaClient.subscribePageWebhooks(pageId, accessToken);
+      await socialAccountRepository.updateById(accountId, {
+        isWebhookSubscribed: true,
+        lastError: undefined,
+      });
+      return true;
+    } catch (error) {
+      const detail = (error as { details?: unknown })?.details;
+      const reason =
+        typeof detail === 'object' && detail
+          ? JSON.stringify(detail).slice(0, 280)
+          : (error as Error).message;
+      logger.warn('Webhook subscription failed', { accountId, pageId, reason });
+      await socialAccountRepository.updateById(accountId, {
+        isWebhookSubscribed: false,
+        lastError: `Webhook subscription failed: ${reason}`,
+      });
+      return false;
+    }
+  }
+
+  /** Re-attempt the webhook subscription for an already-connected account. */
+  async retryWebhookSubscription(user: AuthUser, id: string): Promise<ISocialAccount> {
+    const account = await this.getById(user.workspaceId, id);
+    if (!account.pageId) {
+      throw new BadRequestError('This account has no linked Page to subscribe.');
+    }
+    await this.trySubscribeWebhook(account.id, account.pageId, account.accessToken);
+    return this.getById(user.workspaceId, id);
   }
 
   /** Soft-disconnect an account (keeps history, stops processing). */
