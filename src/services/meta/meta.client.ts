@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { env } from '../../config/env';
 import { logger } from '../../config/logger';
 import { ExternalServiceError } from '../../utils/AppError';
-import { MetaPage, MetaTokenResponse } from './meta.types';
+import { InstagramMediaPage, MediaProductType, MediaType, MetaPage, MetaTokenResponse } from './meta.types';
 
 /**
  * Low-level client for the Meta Graph API (Facebook + Instagram).
@@ -199,6 +199,98 @@ class MetaClient {
       return data;
     } catch (error) {
       this.handleError('sendDirectMessage', error);
+    }
+  }
+
+  /**
+   * List an Instagram Business account's media (feed posts AND reels come from
+   * the same edge). Cursor-paginated. Reels vs posts are distinguished by the
+   * `media_product_type` field (REELS vs FEED); the Graph API does not support
+   * filtering that server-side, so callers filter the returned list.
+   * Requires the `instagram_basic` scope (already requested at connect time).
+   *
+   * Docs: https://developers.facebook.com/docs/instagram-api/reference/ig-user/media
+   */
+  async getMedia(
+    igBusinessId: string,
+    pageAccessToken: string,
+    opts: { limit?: number; after?: string } = {}
+  ): Promise<InstagramMediaPage> {
+    try {
+      const { data } = await this.http.get<{
+        data: Array<{
+          id: string;
+          caption?: string;
+          media_type: MediaType;
+          media_product_type: MediaProductType;
+          media_url?: string;
+          thumbnail_url?: string;
+          permalink?: string;
+          timestamp?: string;
+          like_count?: number;
+          comments_count?: number;
+        }>;
+        paging?: { cursors?: { after?: string }; next?: string };
+      }>(`/${igBusinessId}/media`, {
+        params: {
+          access_token: pageAccessToken,
+          appsecret_proof: this.appSecretProof(pageAccessToken),
+          fields:
+            'id,caption,media_type,media_product_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
+          limit: opts.limit ?? 25,
+          ...(opts.after ? { after: opts.after } : {}),
+        },
+      });
+
+      return {
+        media: (data.data ?? []).map((m) => ({
+          id: m.id,
+          caption: m.caption,
+          mediaType: m.media_type,
+          mediaProductType: m.media_product_type,
+          mediaUrl: m.media_url,
+          thumbnailUrl: m.thumbnail_url,
+          permalink: m.permalink,
+          timestamp: m.timestamp,
+          likeCount: m.like_count,
+          commentsCount: m.comments_count,
+        })),
+        // `next` is only present when another page exists; pair it with the cursor.
+        nextCursor: data.paging?.next ? data.paging?.cursors?.after : undefined,
+      };
+    } catch (error) {
+      this.handleError('getMedia', error);
+    }
+  }
+
+  /**
+   * Fetch engagement insights for a single media object (reach, plays, saves…).
+   * Valid metrics differ by media type, so callers pass the appropriate set.
+   *
+   * Docs: https://developers.facebook.com/docs/instagram-api/reference/ig-media/insights
+   */
+  async getMediaInsights(
+    mediaId: string,
+    metrics: string[],
+    pageAccessToken: string
+  ): Promise<Record<string, number>> {
+    try {
+      const { data } = await this.http.get<{
+        data: Array<{ name: string; values: Array<{ value: number }> }>;
+      }>(`/${mediaId}/insights`, {
+        params: {
+          access_token: pageAccessToken,
+          appsecret_proof: this.appSecretProof(pageAccessToken),
+          metric: metrics.join(','),
+        },
+      });
+      const result: Record<string, number> = {};
+      for (const item of data.data ?? []) {
+        result[item.name] = item.values?.[0]?.value ?? 0;
+      }
+      return result;
+    } catch (error) {
+      this.handleError('getMediaInsights', error);
     }
   }
 

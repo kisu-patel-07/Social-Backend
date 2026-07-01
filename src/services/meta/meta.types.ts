@@ -27,6 +27,32 @@ export interface ConnectableAccount {
   pageAccessToken: string;
 }
 
+/** Instagram media classification. `mediaProductType` distinguishes feed posts from reels/stories. */
+export type MediaProductType = 'FEED' | 'REELS' | 'STORY' | 'AD';
+export type MediaType = 'IMAGE' | 'VIDEO' | 'CAROUSEL_ALBUM';
+
+/** A single Instagram media object (post or reel) from the `/media` edge. */
+export interface InstagramMedia {
+  id: string;
+  caption?: string;
+  mediaType: MediaType;
+  mediaProductType: MediaProductType;
+  mediaUrl?: string;
+  thumbnailUrl?: string;
+  permalink?: string;
+  timestamp?: string;
+  likeCount?: number;
+  commentsCount?: number;
+  /** Populated only when insights are explicitly requested (best-effort). */
+  insights?: Record<string, number>;
+}
+
+/** One page of Instagram media plus the cursor for the next page, if any. */
+export interface InstagramMediaPage {
+  media: InstagramMedia[];
+  nextCursor?: string;
+}
+
 /** Normalized representation of an inbound comment webhook event. */
 export interface IncomingComment {
   platform: Platform;

@@ -37,3 +37,17 @@ export const connectAccountSchema = z.object({
 export const accountIdParamSchema = z.object({
   params: z.object({ id: objectIdSchema }),
 });
+
+/** Fetch posts/reels for a connected Instagram account (cursor-paginated). */
+export const listMediaSchema = z.object({
+  params: z.object({ id: objectIdSchema }),
+  query: z.object({
+    type: z.enum(['posts', 'reels']).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+    after: z.string().min(1).optional(),
+    insights: z
+      .enum(['true', 'false'])
+      .optional()
+      .transform((v) => v === 'true'),
+  }),
+});

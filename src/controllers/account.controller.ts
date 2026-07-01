@@ -19,6 +19,23 @@ export const accountController = {
     sendSuccess(res, account);
   }),
 
+  /** Fetch posts/reels for a connected Instagram account. */
+  listMedia: asyncHandler(async (req: Request, res: Response) => {
+    const { type, limit, after, insights } = req.query as unknown as {
+      type?: 'posts' | 'reels';
+      limit?: number;
+      after?: string;
+      insights?: boolean;
+    };
+    const result = await accountService.listMedia(req.user!.workspaceId, req.params.id, {
+      type,
+      limit,
+      after,
+      insights,
+    });
+    sendSuccess(res, result, 'Instagram media fetched');
+  }),
+
   /** Return the Meta OAuth URL the frontend should redirect to. */
   startOAuth: asyncHandler(async (req: Request, res: Response) => {
     const { url, state } = accountService.getOAuthUrl(req.user!);

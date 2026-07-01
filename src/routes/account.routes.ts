@@ -5,6 +5,7 @@ import { validate } from '../middlewares/validate.middleware';
 import {
   accountIdParamSchema,
   connectAccountSchema,
+  listMediaSchema,
   oauthCallbackSchema,
   startOAuthSchema,
 } from '../validators/account.validator';
@@ -21,6 +22,7 @@ router.get('/', accountController.list);
 router.get('/oauth/url', validate(startOAuthSchema), accountController.startOAuth);
 router.post('/connect', validate(connectAccountSchema), accountController.connect);
 router.get('/:id', validate(accountIdParamSchema), accountController.getById);
+router.get('/:id/media', validate(listMediaSchema), accountController.listMedia);
 router.post(
   '/:id/subscribe-webhook',
   validate(accountIdParamSchema),

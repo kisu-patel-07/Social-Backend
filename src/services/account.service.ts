@@ -9,6 +9,7 @@ import { signStateToken, verifyStateToken } from '../utils/jwt';
 import { activityService } from './activity.service';
 import { analyticsService } from './analytics.service';
 import { metaClient, metaService } from './meta';
+import { InstagramMedia, InstagramMediaPage } from './meta/meta.types';
 import { notificationService } from './notification.service';
 
 interface ConnectAccountParams {
@@ -93,6 +94,68 @@ class AccountService {
     const account = await socialAccountRepository.findOne({ _id: id, workspace: workspaceId });
     if (!account) throw new NotFoundError('Connected account not found');
     return account;
+  }
+
+  /**
+   * Fetch an Instagram Business account's posts and/or reels via the Graph API.
+   * `type` filters the current page client-side (the API returns both from one
+   * edge). When `insights` is set, each item is enriched best-effort with
+   * engagement metrics — a per-item failure just omits that item's insights.
+   */
+  async listMedia(
+    workspaceId: string,
+    accountId: string,
+    opts: { type?: 'posts' | 'reels'; limit?: number; after?: string; insights?: boolean } = {}
+  ): Promise<InstagramMediaPage> {
+    const account = await this.getById(workspaceId, accountId);
+    if (account.platform !== Platform.INSTAGRAM || !account.instagramBusinessId) {
+      throw new BadRequestError('Media can only be fetched for Instagram accounts');
+    }
+
+    const full = await socialAccountRepository.findWithToken(account.id);
+    if (!full?.accessToken) {
+      throw new BadRequestError('This account has no valid access token — please reconnect it.');
+    }
+
+    const page = await metaClient.getMedia(account.instagramBusinessId, full.accessToken, {
+      limit: opts.limit,
+      after: opts.after,
+    });
+
+    let media = page.media;
+    if (opts.type === 'reels') {
+      media = media.filter((m) => m.mediaProductType === 'REELS');
+    } else if (opts.type === 'posts') {
+      media = media.filter((m) => m.mediaProductType === 'FEED');
+    }
+
+    if (opts.insights) {
+      media = await Promise.all(media.map((m) => this.enrichWithInsights(m, full.accessToken)));
+    }
+
+    return { media, nextCursor: page.nextCursor };
+  }
+
+  /** Best-effort insights enrichment; returns the media unchanged if it fails. */
+  private async enrichWithInsights(
+    media: InstagramMedia,
+    accessToken: string
+  ): Promise<InstagramMedia> {
+    // Metric availability differs by media type; request only what applies.
+    const metrics =
+      media.mediaProductType === 'REELS'
+        ? ['plays', 'reach', 'likes', 'comments', 'saved', 'shares', 'total_interactions']
+        : ['reach', 'likes', 'comments', 'saved', 'shares', 'total_interactions'];
+    try {
+      const insights = await metaClient.getMediaInsights(media.id, metrics, accessToken);
+      return { ...media, insights };
+    } catch (error) {
+      logger.warn('Failed to fetch media insights', {
+        mediaId: media.id,
+        error: (error as Error).message,
+      });
+      return media;
+    }
   }
 
   /** Persist a selected Page / IG business account and subscribe webhooks. */
