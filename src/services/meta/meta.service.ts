@@ -17,6 +17,7 @@ class MetaService {
     'pages_manage_engagement',
     'pages_messaging',
     'pages_read_engagement',
+    'pages_read_user_content',
     'instagram_basic',
     'instagram_manage_comments',
     'instagram_manage_messages',

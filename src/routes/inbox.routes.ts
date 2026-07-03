@@ -3,6 +3,7 @@ import { inboxController } from '../controllers/inbox.controller';
 import { authenticate } from '../middlewares';
 import { validate } from '../middlewares/validate.middleware';
 import {
+  listCommentsSchema,
   listConversationsSchema,
   replyMessageSchema,
   updateConversationStatusSchema,
@@ -15,6 +16,7 @@ const router = Router();
 router.use(authenticate);
 
 // Unified inbox: conversations + their messages.
+router.get('/comments', validate(listCommentsSchema), inboxController.listComments);
 router.get('/conversations', validate(listConversationsSchema), inboxController.listConversations);
 router.get('/conversations/unread-count', inboxController.unreadCount);
 router.get(

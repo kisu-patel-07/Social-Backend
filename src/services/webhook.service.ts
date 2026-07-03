@@ -40,6 +40,10 @@ class WebhookService {
   /** Entry point: parse a raw payload and process every contained event. */
   async process(payload: unknown): Promise<void> {
     const { comments, messages } = parseWebhookPayload(payload);
+    logger.info('Webhook payload parsed', {
+      comments: comments.length,
+      messages: messages.length,
+    });
 
     for (const comment of comments) {
       try {
@@ -89,10 +93,22 @@ class WebhookService {
   }
 
   private async handleComment(comment: IncomingComment): Promise<void> {
+    logger.info('Comment event received', {
+      platform: comment.platform,
+      accountExternalId: comment.accountExternalId,
+      commentId: comment.commentId,
+      fromId: comment.fromId,
+      fromUsername: comment.fromUsername,
+      text: comment.text,
+    });
+
     const account = await this.resolveAccount(comment.platform, comment.accountExternalId);
     if (!account || !account.isActive || !account.pageId) {
-      logger.debug('No active account for comment event', {
+      logger.warn('Comment dropped: no active connected account matches this event', {
         accountExternalId: comment.accountExternalId,
+        found: Boolean(account),
+        isActive: account?.isActive,
+        hasPageId: Boolean(account?.pageId),
       });
       return;
     }
@@ -102,7 +118,12 @@ class WebhookService {
       account._id.toString(),
       comment.commentId
     );
-    if (seen) return;
+    if (seen) {
+      logger.info('Comment dropped: already processed (idempotency)', {
+        commentId: comment.commentId,
+      });
+      return;
+    }
 
     // Record the inbound comment.
     await messageRepository.create({
@@ -113,6 +134,7 @@ class WebhookService {
       type: MessageType.COMMENT,
       status: MessageStatus.RECEIVED,
       fromId: comment.fromId,
+      fromUsername: comment.fromUsername ?? comment.fromName,
       text: comment.text,
       externalId: comment.commentId,
       postId: comment.postId,
@@ -123,9 +145,21 @@ class WebhookService {
       comment.postId
     );
     const match = this.matchAutomation(automations, comment.text);
-    if (!match) return;
+    if (!match) {
+      logger.info('Comment recorded but no automation matched', {
+        commentId: comment.commentId,
+        text: comment.text,
+        candidateAutomations: automations.map((a) => ({ name: a.name, keywords: a.keywords })),
+      });
+      return;
+    }
 
     const { automation, keyword } = match;
+    logger.info('Automation matched — sending replies', {
+      automation: automation.name,
+      keyword,
+      commentId: comment.commentId,
+    });
     const now = new Date();
 
     // 1) Public reply to the comment.
@@ -163,7 +197,12 @@ class WebhookService {
         account.accessToken
       );
       await messageRepository.updateById(msg._id, { status: MessageStatus.SENT });
+      logger.info('Public reply sent', { commentId: comment.commentId });
     } catch (error) {
+      logger.error('Public reply FAILED', {
+        commentId: comment.commentId,
+        error: (error as Error).message,
+      });
       await messageRepository.updateById(msg._id, {
         status: MessageStatus.FAILED,
         error: (error as Error).message,
@@ -197,7 +236,13 @@ class WebhookService {
       );
       await messageRepository.updateById(dm._id, { status: MessageStatus.SENT });
       await analyticsService.track(account.workspace.toString(), 'dmSent', comment.platform);
+      logger.info('Private DM sent', { commentId: comment.commentId, toId: comment.fromId });
     } catch (error) {
+      logger.error('Private DM FAILED', {
+        commentId: comment.commentId,
+        toId: comment.fromId,
+        error: (error as Error).message,
+      });
       await messageRepository.updateById(dm._id, {
         status: MessageStatus.FAILED,
         error: (error as Error).message,
@@ -316,11 +361,28 @@ class WebhookService {
   }
 
   private async handleMessage(message: IncomingMessage): Promise<void> {
+    logger.info('DM event received', {
+      platform: message.platform,
+      accountExternalId: message.accountExternalId,
+      fromId: message.fromId,
+      text: message.text,
+    });
+
     const account = await this.resolveAccount(message.platform, message.accountExternalId);
-    if (!account || !account.isActive) return;
+    if (!account || !account.isActive) {
+      logger.warn('DM dropped: no active connected account matches this event', {
+        accountExternalId: message.accountExternalId,
+        found: Boolean(account),
+        isActive: account?.isActive,
+      });
+      return;
+    }
 
     // Ignore echoes of our own outbound messages.
     if (message.fromId === account.pageId || message.fromId === account.instagramBusinessId) {
+      logger.info('DM dropped: echo of our own outbound message', {
+        messageId: message.messageId,
+      });
       return;
     }
 
@@ -328,7 +390,22 @@ class WebhookService {
       account._id.toString(),
       message.messageId
     );
-    if (seen) return;
+    if (seen) {
+      logger.info('DM dropped: already processed (idempotency)', {
+        messageId: message.messageId,
+      });
+      return;
+    }
+
+    // DM webhooks only carry the sender's ID; fetch their profile once per
+    // new contact so the inbox can show a real name instead of "Unknown".
+    const existing = await conversationRepository.findByParticipant(
+      account._id.toString(),
+      message.fromId
+    );
+    const profile = existing?.participantUsername
+      ? null
+      : await metaClient.getUserProfile(message.fromId, account.accessToken, message.platform);
 
     const now = message.createdTime ?? new Date();
     const conversation = await conversationRepository.upsertForInbound({
@@ -336,6 +413,9 @@ class WebhookService {
       socialAccount: account._id.toString(),
       platform: message.platform,
       participantId: message.fromId,
+      participantUsername: profile?.username ?? profile?.name,
+      participantName: profile?.name,
+      participantAvatarUrl: profile?.profilePic,
       preview: message.text,
       at: now,
     });

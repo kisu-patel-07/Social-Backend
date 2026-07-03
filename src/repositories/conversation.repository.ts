@@ -22,6 +22,7 @@ class ConversationRepository extends BaseRepository<IConversation> {
     participantId: string;
     participantUsername?: string;
     participantName?: string;
+    participantAvatarUrl?: string;
     preview: string;
     at: Date;
   }): Promise<IConversation> {
@@ -34,6 +35,7 @@ class ConversationRepository extends BaseRepository<IConversation> {
             platform: params.platform,
             participantUsername: params.participantUsername,
             participantName: params.participantName,
+            participantAvatarUrl: params.participantAvatarUrl,
             lastMessageAt: params.at,
             lastMessagePreview: params.preview.slice(0, 280),
             status: ConversationStatus.UNREAD,

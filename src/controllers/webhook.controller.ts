@@ -28,6 +28,13 @@ export const webhookController = {
     const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
     const signature = req.headers['x-hub-signature-256'] as string | undefined;
 
+    const body = req.body as { object?: string; entry?: Array<{ id?: string }> };
+    logger.info('Webhook POST received', {
+      object: body?.object,
+      entryIds: body?.entry?.map((e) => e.id),
+      hasSignature: Boolean(signature),
+    });
+
     if (!rawBody || !verifyWebhookSignature(rawBody, signature)) {
       logger.warn('Rejected webhook with invalid signature');
       res.sendStatus(HttpStatus.FORBIDDEN);

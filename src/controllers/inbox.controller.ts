@@ -18,6 +18,17 @@ export const inboxController = {
     sendPaginated(res, result.items, result.meta);
   }),
 
+  listComments: asyncHandler(async (req: Request, res: Response) => {
+    const options = buildPaginationOptions(req.query, 'createdAt');
+    const result = await inboxService.listComments(req.user!.workspaceId, {
+      ...options,
+      platform: req.query.platform as Platform | undefined,
+      socialAccountId: req.query.socialAccountId as string | undefined,
+      search: req.query.search as string | undefined,
+    });
+    sendPaginated(res, result.items, result.meta);
+  }),
+
   getThread: asyncHandler(async (req: Request, res: Response) => {
     const thread = await inboxService.getThread(req.user!.workspaceId, req.params.id);
     sendSuccess(res, thread);

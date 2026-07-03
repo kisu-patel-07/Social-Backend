@@ -294,6 +294,41 @@ class MetaClient {
     }
   }
 
+  /**
+   * Fetch a message sender's profile (name/username/avatar) from their
+   * IG-scoped or page-scoped ID, for display in the inbox. Best-effort:
+   * returns null instead of throwing (profile access can be restricted).
+   *
+   * Docs: https://developers.facebook.com/docs/messenger-platform/instagram/features/user-profile
+   */
+  async getUserProfile(
+    userId: string,
+    pageAccessToken: string,
+    platform: string
+  ): Promise<{ name?: string; username?: string; profilePic?: string } | null> {
+    try {
+      const fields = platform === 'instagram' ? 'name,username,profile_pic' : 'name,profile_pic';
+      const { data } = await this.http.get<{
+        name?: string;
+        username?: string;
+        profile_pic?: string;
+      }>(`/${userId}`, {
+        params: {
+          access_token: pageAccessToken,
+          appsecret_proof: this.appSecretProof(pageAccessToken),
+          fields,
+        },
+      });
+      return { name: data.name, username: data.username, profilePic: data.profile_pic };
+    } catch (error) {
+      const detail = axios.isAxiosError(error)
+        ? (error as AxiosError).response?.data
+        : (error as Error)?.message;
+      logger.warn('Could not fetch sender profile for inbox display', { userId, detail });
+      return null;
+    }
+  }
+
   /** Inspect a token's validity and expiry (used by the refresh job). */
   async debugToken(
     inputToken: string

@@ -27,6 +27,12 @@ interface ConversationFilters extends PaginationOptions {
   search?: string;
 }
 
+interface CommentFilters extends PaginationOptions {
+  platform?: Platform;
+  socialAccountId?: string;
+  search?: string;
+}
+
 class InboxService {
   list(workspaceId: string, filters: ConversationFilters): Promise<PaginatedResult<IConversation>> {
     const query: FilterQuery<IConversation> = { workspace: workspaceId };
@@ -43,6 +49,29 @@ class InboxService {
     return conversationRepository.paginate(
       query,
       { ...filters, sort: { lastMessageAt: -1 } },
+      undefined,
+      { path: 'socialAccount', select: 'name platform username' }
+    );
+  }
+
+  /** All incoming comments captured by webhooks, whether or not an automation matched. */
+  listComments(workspaceId: string, filters: CommentFilters): Promise<PaginatedResult<IMessage>> {
+    const query: FilterQuery<IMessage> = {
+      workspace: workspaceId,
+      type: MessageType.COMMENT,
+      direction: MessageDirection.INBOUND,
+    };
+    if (filters.platform) query.platform = filters.platform;
+    if (filters.socialAccountId) query.socialAccount = filters.socialAccountId;
+    if (filters.search) {
+      query.$or = [
+        { text: { $regex: filters.search, $options: 'i' } },
+        { fromUsername: { $regex: filters.search, $options: 'i' } },
+      ];
+    }
+    return messageRepository.paginate(
+      query,
+      { ...filters, sort: { createdAt: -1 } },
       undefined,
       { path: 'socialAccount', select: 'name platform username' }
     );

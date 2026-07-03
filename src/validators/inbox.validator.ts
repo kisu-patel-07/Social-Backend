@@ -10,6 +10,13 @@ export const listConversationsSchema = z.object({
   }),
 });
 
+export const listCommentsSchema = z.object({
+  query: paginationQuerySchema.extend({
+    platform: z.nativeEnum(Platform).optional(),
+    socialAccountId: objectIdSchema.optional(),
+  }),
+});
+
 export const replyMessageSchema = z.object({
   params: z.object({ id: objectIdSchema }),
   body: z.object({

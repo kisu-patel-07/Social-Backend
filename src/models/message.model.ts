@@ -12,6 +12,8 @@ export interface IMessage extends Document {
   status: MessageStatus;
   /** Sender/recipient external IDs. */
   fromId?: string;
+  /** Sender's username/display name (for showing comments in the UI). */
+  fromUsername?: string;
   toId?: string;
   text: string;
   /** External Meta object id (comment id / message id) for idempotency. */
@@ -46,6 +48,7 @@ const messageSchema = new Schema<IMessage>(
       default: MessageStatus.PENDING,
     },
     fromId: { type: String },
+    fromUsername: { type: String },
     toId: { type: String },
     text: { type: String, default: '' },
     externalId: { type: String, index: true, sparse: true },
