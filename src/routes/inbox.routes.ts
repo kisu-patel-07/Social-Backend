@@ -17,6 +17,7 @@ router.use(authenticate);
 
 // Unified inbox: conversations + their messages.
 router.get('/comments', validate(listCommentsSchema), inboxController.listComments);
+router.post('/comments/:id/reply', validate(replyMessageSchema), inboxController.replyComment);
 router.get('/conversations', validate(listConversationsSchema), inboxController.listConversations);
 router.get('/conversations/unread-count', inboxController.unreadCount);
 router.get(

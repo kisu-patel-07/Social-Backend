@@ -177,6 +177,69 @@ class InboxService {
     return message;
   }
 
+  /** Send a manual public reply to an inbound comment from the Comments feed. */
+  async replyToComment(user: AuthUser, messageId: string, text: string): Promise<IMessage> {
+    const comment = await messageRepository.findOne({
+      _id: messageId,
+      workspace: user.workspaceId,
+      type: MessageType.COMMENT,
+      direction: MessageDirection.INBOUND,
+    });
+    if (!comment) throw new NotFoundError('Comment not found');
+    if (!comment.externalId) {
+      throw new BadRequestError('Comment is missing its external id and cannot be replied to');
+    }
+
+    const account = await socialAccountRepository.findWithToken(comment.socialAccount.toString());
+    if (!account || !account.isActive) {
+      throw new BadRequestError('The connected account for this comment is unavailable');
+    }
+
+    // Record the outbound reply as pending, then attempt delivery.
+    const message = await messageRepository.create({
+      workspace: comment.workspace,
+      socialAccount: account._id,
+      platform: comment.platform,
+      direction: MessageDirection.OUTBOUND,
+      type: MessageType.PUBLIC_REPLY,
+      status: MessageStatus.PENDING,
+      toId: comment.fromId,
+      text,
+      postId: comment.postId,
+      isAutomated: false,
+    });
+
+    try {
+      const result = await metaClient.replyToComment(
+        comment.externalId,
+        text,
+        account.accessToken
+      );
+      await messageRepository.updateById(message._id, {
+        status: MessageStatus.SENT,
+        externalId: result.id,
+      });
+      message.status = MessageStatus.SENT;
+    } catch (error) {
+      await messageRepository.updateById(message._id, {
+        status: MessageStatus.FAILED,
+        error: (error as Error).message,
+      });
+      throw error;
+    }
+
+    await activityService.log({
+      workspace: user.workspaceId,
+      user: user.id,
+      action: ActivityAction.MESSAGE_SENT,
+      description: 'Replied to a comment',
+      entityType: 'Message',
+      entityId: comment._id,
+    });
+
+    return message;
+  }
+
   /** Workspace-wide unread count for the inbox badge. */
   countUnread(workspaceId: string): Promise<number> {
     return conversationRepository.countUnreadByWorkspace(workspaceId);

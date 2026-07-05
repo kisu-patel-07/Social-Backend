@@ -48,6 +48,11 @@ export const inboxController = {
     sendCreated(res, message, 'Reply sent');
   }),
 
+  replyComment: asyncHandler(async (req: Request, res: Response) => {
+    const message = await inboxService.replyToComment(req.user!, req.params.id, req.body.text);
+    sendCreated(res, message, 'Reply posted');
+  }),
+
   unreadCount: asyncHandler(async (req: Request, res: Response) => {
     const count = await inboxService.countUnread(req.user!.workspaceId);
     sendSuccess(res, { count });
