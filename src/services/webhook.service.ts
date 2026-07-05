@@ -1,9 +1,9 @@
+import { Types } from 'mongoose';
 import { env } from '../config/env';
 import { logger } from '../config/logger';
 import {
   ActivityAction,
   AutomationStatus,
-  ConversationStatus,
   LeadStatus,
   MessageDirection,
   MessageStatus,
@@ -12,6 +12,7 @@ import {
   Platform,
 } from '../constants';
 import { IAutomation } from '../models/automation.model';
+import { IConversation } from '../models/conversation.model';
 import { ISocialAccount } from '../models/socialAccount.model';
 import {
   automationRepository,
@@ -162,14 +163,29 @@ class WebhookService {
     });
     const now = new Date();
 
+    // Ensure the DM thread exists *before* we send the automated DM, so the
+    // outbound message can be linked to it and appears in the conversation
+    // view — otherwise the thread shows empty even though the list preview
+    // (which reads the conversation's lastMessagePreview) has text.
+    const conversation = await conversationRepository.upsertForInbound({
+      workspace: account.workspace.toString(),
+      socialAccount: account._id.toString(),
+      platform: comment.platform,
+      participantId: comment.fromId,
+      participantUsername: comment.fromUsername,
+      participantName: comment.fromName,
+      preview: automation.privateMessage,
+      at: now,
+    });
+
     // 1) Public reply to the comment.
     await this.sendPublicReply(account, automation, comment);
 
-    // 2) Private DM to the commenter.
-    await this.sendPrivateMessage(account, automation, comment);
+    // 2) Private DM to the commenter, linked to the conversation thread.
+    await this.sendPrivateMessage(account, automation, comment, conversation._id);
 
-    // 3) Lead + conversation + analytics + notifications.
-    await this.registerTriggerOutcome(account, automation, comment, keyword, now);
+    // 3) Lead + analytics + notifications.
+    await this.registerTriggerOutcome(account, automation, comment, keyword, now, conversation);
   }
 
   private async sendPublicReply(
@@ -213,11 +229,13 @@ class WebhookService {
   private async sendPrivateMessage(
     account: ISocialAccount,
     automation: IAutomation,
-    comment: IncomingComment
+    comment: IncomingComment,
+    conversationId: Types.ObjectId
   ): Promise<void> {
     const dm = await messageRepository.create({
       workspace: account.workspace,
       socialAccount: account._id,
+      conversation: conversationId,
       platform: comment.platform,
       direction: MessageDirection.OUTBOUND,
       type: MessageType.DIRECT_MESSAGE,
@@ -255,25 +273,10 @@ class WebhookService {
     automation: IAutomation,
     comment: IncomingComment,
     keyword: string,
-    now: Date
+    now: Date,
+    conversation: IConversation
   ): Promise<void> {
     const workspaceId = account.workspace.toString();
-
-    // Conversation (DM thread) for the unified inbox.
-    const conversation = await conversationRepository.upsertForInbound({
-      workspace: workspaceId,
-      socialAccount: account._id.toString(),
-      platform: comment.platform,
-      participantId: comment.fromId,
-      participantUsername: comment.fromUsername,
-      participantName: comment.fromName,
-      preview: automation.privateMessage,
-      at: now,
-    });
-    // The DM we sent is outbound; the upsert above optimistically bumped unread.
-    await conversationRepository.updateById(conversation._id, {
-      status: ConversationStatus.UNREAD,
-    });
 
     // Lead — upsert one per participant per account.
     const existingLead = await leadRepository.findByExternalUser(

@@ -46,6 +46,34 @@ See [.env.example](.env.example). For local development you only strictly need
 (`EMAIL_DRY_RUN=true`, placeholder Meta creds) so nothing external is required
 to boot the API. Plug real Meta/Brevo credentials in later without code changes.
 
+## Deploying to Vercel
+
+The server runs serverless on Vercel via [api/index.ts](api/index.ts), which wraps
+the same Express app (`src/app.ts`) and reuses the MongoDB connection across warm
+invocations. `vercel.json` rewrites all routes to it and schedules the daily
+token-refresh cron ([api/cron/refresh-tokens.ts](api/cron/refresh-tokens.ts)).
+
+1. Create a Vercel project with **Root Directory = `backend`**, Framework Preset **Other**.
+2. Add all variables from `.env` in the project settings, plus:
+   - `NODE_ENV=production`
+   - `NODEJS_HELPERS=0` — **required**; stops Vercel from pre-parsing request bodies,
+     which would break `express.json()` and the Meta webhook signature verification.
+   - `CRON_SECRET` — any long random string; Vercel Cron sends it automatically as a
+     Bearer token, and the cron endpoint refuses to run without it.
+   - `CLIENT_URL` — the deployed frontend origin(s), comma separated (CORS).
+   - `META_OAUTH_REDIRECT_URI` — the deployed callback URL
+     (`https://<backend-domain>/api/v1/accounts/oauth/callback`).
+3. Deploy (`npx vercel --prod` from `backend/`, or connect the repo).
+4. Run `npm run seed:plans` once from your machine with `MONGODB_URI` pointing at the
+   production database (indexes too: `autoIndex` is off in production, so create any
+   missing indexes manually or via a one-off run).
+
+Serverless caveats:
+
+- `express-rate-limit` uses an in-memory store, so limits apply per lambda instance
+  (approximate, not global). Fine for MVP; swap in a Mongo/Upstash store for strictness.
+- `src/server.ts` (long-running mode) still works unchanged for Railway/Render/VPS.
+
 ## Architecture
 
 ```

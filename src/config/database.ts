@@ -26,6 +26,23 @@ export async function connectDatabase(): Promise<typeof mongoose> {
   }
 }
 
+let connectionPromise: Promise<typeof mongoose> | null = null;
+
+/**
+ * Serverless-safe connect (Vercel/Lambda): reuses an established or in-flight
+ * connection across warm invocations instead of reconnecting on every request.
+ */
+export async function ensureDatabaseConnection(): Promise<typeof mongoose> {
+  if (mongoose.connection.readyState === 1) return mongoose;
+  if (!connectionPromise) {
+    connectionPromise = connectDatabase().catch((error) => {
+      connectionPromise = null; // allow retry on the next invocation
+      throw error;
+    });
+  }
+  return connectionPromise;
+}
+
 /** Gracefully close the MongoDB connection (used on shutdown). */
 export async function disconnectDatabase(): Promise<void> {
   await mongoose.connection.close();
