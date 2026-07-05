@@ -174,6 +174,57 @@ class MetaClient {
     }
   }
 
+  /**
+   * Send a private reply that carries call-to-action link buttons, using the
+   * Send API button template (used by Automation Studio). Falls back to the
+   * plain-text shape when no buttons are provided. Button template text is
+   * capped at 640 chars by Meta; callers enforce that at validation time.
+   *
+   * Docs: https://developers.facebook.com/docs/messenger-platform/send-messages/template/button
+   */
+  async sendPrivateReplyWithButtons(
+    pageId: string,
+    commentId: string,
+    text: string,
+    buttons: Array<{ title: string; url: string }>,
+    pageAccessToken: string
+  ): Promise<{ id: string }> {
+    if (!buttons.length) {
+      return this.sendPrivateReply(pageId, commentId, text, pageAccessToken);
+    }
+    try {
+      const { data } = await this.http.post<{ id: string }>(
+        `/${pageId}/messages`,
+        {
+          recipient: { comment_id: commentId },
+          message: {
+            attachment: {
+              type: 'template',
+              payload: {
+                template_type: 'button',
+                text,
+                buttons: buttons.map((b) => ({
+                  type: 'web_url',
+                  url: b.url,
+                  title: b.title,
+                })),
+              },
+            },
+          },
+        },
+        {
+          params: {
+            access_token: pageAccessToken,
+            appsecret_proof: this.appSecretProof(pageAccessToken),
+          },
+        }
+      );
+      return data;
+    } catch (error) {
+      this.handleError('sendPrivateReplyWithButtons', error);
+    }
+  }
+
   /** Send a direct message to a user via the Send API (manual inbox replies). */
   async sendDirectMessage(
     pageId: string,

@@ -2,6 +2,7 @@ export { UserModel, IUser } from './user.model';
 export { WorkspaceModel, IWorkspace } from './workspace.model';
 export { SocialAccountModel, ISocialAccount } from './socialAccount.model';
 export { AutomationModel, IAutomation } from './automation.model';
+export { StudioAutomationModel, IStudioAutomation, IStudioButton } from './studioAutomation.model';
 export { KeywordModel, IKeyword } from './keyword.model';
 export { ConversationModel, IConversation } from './conversation.model';
 export { MessageModel, IMessage } from './message.model';

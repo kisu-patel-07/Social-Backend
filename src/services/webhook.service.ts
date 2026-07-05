@@ -28,6 +28,7 @@ import { analyticsService } from './analytics.service';
 import { emailService } from './email/email.service';
 import { IncomingComment, IncomingMessage, metaClient, parseWebhookPayload } from './meta';
 import { notificationService } from './notification.service';
+import { studioEngineService } from './studioEngine.service';
 
 /**
  * The automation engine. Processes normalized Meta webhook events:
@@ -147,11 +148,17 @@ class WebhookService {
     );
     const match = this.matchAutomation(automations, comment.text);
     if (!match) {
-      logger.info('Comment recorded but no automation matched', {
-        commentId: comment.commentId,
-        text: comment.text,
-        candidateAutomations: automations.map((a) => ({ name: a.name, keywords: a.keywords })),
-      });
+      // Classic automations take priority; give Automation Studio (v2 trial)
+      // a chance only when none matched, since Meta allows a single private
+      // reply per comment.
+      const handledByStudio = await studioEngineService.handleComment(account, comment);
+      if (!handledByStudio) {
+        logger.info('Comment recorded but no automation matched', {
+          commentId: comment.commentId,
+          text: comment.text,
+          candidateAutomations: automations.map((a) => ({ name: a.name, keywords: a.keywords })),
+        });
+      }
       return;
     }
 

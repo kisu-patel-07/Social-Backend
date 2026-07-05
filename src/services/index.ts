@@ -1,6 +1,8 @@
 export { authService } from './auth.service';
 export { accountService } from './account.service';
 export { automationService } from './automation.service';
+export { studioAutomationService } from './studioAutomation.service';
+export { studioEngineService } from './studioEngine.service';
 export { leadService } from './lead.service';
 export { inboxService } from './inbox.service';
 export { analyticsService } from './analytics.service';

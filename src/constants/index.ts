@@ -30,6 +30,32 @@ export enum KeywordMatchType {
   CONTAINS = 'contains',
 }
 
+/**
+ * Automation Studio (v2 trial) — parallel to the classic Automation feature.
+ * Kept as separate enums so the classic feature is untouched.
+ */
+export enum StudioAutomationStatus {
+  DRAFT = 'draft',
+  ACTIVE = 'active',
+  PAUSED = 'paused',
+}
+
+/** How Studio automations decide whether a comment triggers. */
+export enum StudioKeywordMode {
+  /** Every comment triggers (no keyword needed). */
+  ANY = 'any',
+  /** Comment contains any keyword as a substring (classic behavior). */
+  CONTAINS = 'contains',
+  /** Comment contains a keyword as a whole word. */
+  EXACT = 'exact',
+}
+
+/** Which posts a Studio automation listens on. */
+export enum StudioPostScope {
+  ALL = 'all',
+  SPECIFIC = 'specific',
+}
+
 export enum MessageDirection {
   INBOUND = 'inbound',
   OUTBOUND = 'outbound',
