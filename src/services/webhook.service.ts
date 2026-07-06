@@ -4,6 +4,7 @@ import { logger } from '../config/logger';
 import {
   ActivityAction,
   AutomationStatus,
+  LeadSource,
   LeadStatus,
   MessageDirection,
   MessageStatus,
@@ -302,6 +303,8 @@ class WebhookService {
           externalUserId: comment.fromId,
           username: comment.fromUsername,
           name: comment.fromName,
+          source: LeadSource.COMMENT,
+          lastInteractionAt: now,
           postId: comment.postId,
           comment: comment.text,
           conversation: conversation._id,
@@ -311,7 +314,12 @@ class WebhookService {
         });
       })());
 
-    if (!existingLead) {
+    if (existingLead) {
+      await leadRepository.registerInteraction(existingLead._id.toString(), now, {
+        username: comment.fromUsername,
+        name: comment.fromName,
+      });
+    } else {
       await conversationRepository.updateById(conversation._id, { lead: lead._id });
     }
 
@@ -334,7 +342,12 @@ class WebhookService {
     ]);
 
     if (leadIsNew) {
-      await this.notifyNewLead(account, lead._id.toString(), comment, keyword);
+      await this.notifyNewLead(
+        account,
+        lead._id.toString(),
+        comment.fromUsername || comment.fromName || comment.fromId,
+        comment.platform
+      );
       await analyticsService.refreshWorkspaceStats(workspaceId);
     }
   }
@@ -342,21 +355,20 @@ class WebhookService {
   private async notifyNewLead(
     account: ISocialAccount,
     leadId: string,
-    comment: IncomingComment,
-    _keyword: string
+    leadName: string,
+    platform: Platform
   ): Promise<void> {
     // Notify the workspace owner. (Multi-member fan-out is a future phase.)
     const ownerUser = await userRepository.findOne({ workspace: account.workspace });
     if (!ownerUser) return;
 
-    const leadName = comment.fromUsername || comment.fromName || comment.fromId;
     await notificationService.create({
       workspace: account.workspace.toString(),
       user: ownerUser._id.toString(),
       type: NotificationType.NEW_LEAD,
       title: 'New lead 🎯',
-      body: `${leadName} engaged on ${comment.platform}.`,
-      link: `/leads/${leadId}`,
+      body: `${leadName} engaged on ${platform}.`,
+      link: `/leads?id=${leadId}`,
     });
 
     if (ownerUser.notificationPreferences?.newLead) {
@@ -364,8 +376,8 @@ class WebhookService {
         ownerUser.email,
         ownerUser.name,
         leadName,
-        comment.platform,
-        `${env.CLIENT_URL.split(',')[0]}/leads/${leadId}`
+        platform,
+        `${env.CLIENT_URL.split(',')[0]}/leads?id=${leadId}`
       );
     }
   }
@@ -450,6 +462,60 @@ class WebhookService {
       message.platform,
       now
     );
+
+    await this.upsertDmContact(account, message, conversation, now);
+  }
+
+  /**
+   * Anyone who DMs the account becomes a contact (Manychat-style "subscribed"):
+   * they can then be tagged, segmented, exported and followed up from the CRM.
+   */
+  private async upsertDmContact(
+    account: ISocialAccount,
+    message: IncomingMessage,
+    conversation: IConversation,
+    now: Date
+  ): Promise<void> {
+    const workspaceId = account.workspace.toString();
+    const existingLead = await leadRepository.findByExternalUser(
+      account._id.toString(),
+      message.fromId
+    );
+
+    if (existingLead) {
+      await leadRepository.registerInteraction(existingLead._id.toString(), now, {
+        username: conversation.participantUsername,
+        name: conversation.participantName,
+        avatarUrl: conversation.participantAvatarUrl,
+      });
+      if (!existingLead.conversation) {
+        await leadRepository.updateById(existingLead._id, { conversation: conversation._id });
+      }
+      return;
+    }
+
+    const lead = await leadRepository.create({
+      workspace: account.workspace,
+      socialAccount: account._id,
+      platform: message.platform,
+      externalUserId: message.fromId,
+      username: conversation.participantUsername,
+      name: conversation.participantName,
+      avatarUrl: conversation.participantAvatarUrl,
+      source: LeadSource.DM,
+      lastInteractionAt: now,
+      conversation: conversation._id,
+      status: LeadStatus.NEW,
+    });
+    await conversationRepository.updateById(conversation._id, { lead: lead._id });
+    await analyticsService.track(workspaceId, 'newLeads', message.platform, now);
+    await this.notifyNewLead(
+      account,
+      lead._id.toString(),
+      conversation.participantUsername || conversation.participantName || message.fromId,
+      message.platform
+    );
+    await analyticsService.refreshWorkspaceStats(workspaceId);
   }
 }
 

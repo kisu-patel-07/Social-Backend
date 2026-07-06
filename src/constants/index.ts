@@ -89,6 +89,12 @@ export enum LeadStatus {
   LOST = 'lost',
 }
 
+/** How a contact/lead first entered the workspace ("opted in through"). */
+export enum LeadSource {
+  COMMENT = 'comment',
+  DM = 'dm',
+}
+
 export enum NotificationType {
   NEW_LEAD = 'new_lead',
   ACCOUNT_CONNECTED = 'account_connected',
@@ -147,6 +153,12 @@ export enum TokenType {
   EMAIL_VERIFICATION = 'email_verification',
   PASSWORD_RESET = 'password_reset',
 }
+
+/**
+ * Meta's standard messaging window: free-form DMs are only allowed within
+ * 24 hours of the contact's last inbound message (both IG and Messenger).
+ */
+export const DM_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** Default pagination settings used across list endpoints. */
 export const PAGINATION = {

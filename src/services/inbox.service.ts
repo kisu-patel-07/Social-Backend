@@ -2,6 +2,7 @@ import { FilterQuery } from 'mongoose';
 import {
   ActivityAction,
   ConversationStatus,
+  DM_WINDOW_MS,
   MessageDirection,
   MessageStatus,
   MessageType,
@@ -123,6 +124,19 @@ class InboxService {
     }
     if (!account.pageId) {
       throw new BadRequestError('Account is missing a page id required to send messages');
+    }
+
+    // Meta only accepts free-form DMs within 24h of the contact's last
+    // message. Fail fast with a clear reason instead of a Meta API error.
+    const lastInbound = await messageRepository.findOne(
+      { conversation: conversation._id, direction: MessageDirection.INBOUND },
+      undefined,
+      { sort: { createdAt: -1 } }
+    );
+    if (!lastInbound || Date.now() - lastInbound.createdAt.getTime() > DM_WINDOW_MS) {
+      throw new BadRequestError(
+        "This contact's 24-hour messaging window has closed. Meta only allows replies within 24 hours of their last message — you can respond again once they message you."
+      );
     }
 
     // Record the outbound message as pending, then attempt delivery.

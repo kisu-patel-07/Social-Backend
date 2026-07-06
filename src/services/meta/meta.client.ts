@@ -39,7 +39,18 @@ class MetaClient {
       ? (error as AxiosError).response?.data
       : (error as Error)?.message;
     logger.error(`Meta API error: ${context}`, { detail });
-    throw new ExternalServiceError(`Meta API request failed: ${context}`, detail);
+
+    // Surface Meta's own error message (e.g. "(#10) This message is sent
+    // outside of allowed window") so it reaches stored messages and the UI,
+    // instead of a generic wrapper that hides the actual cause.
+    const metaError = (
+      detail as { error?: { message?: string; code?: number; error_subcode?: number } } | undefined
+    )?.error;
+    const summary = metaError?.message
+      ? `Meta error: ${metaError.message}` +
+        (metaError.code ? ` [code ${metaError.code}${metaError.error_subcode ? `.${metaError.error_subcode}` : ''}]` : '')
+      : `Meta API request failed: ${context}`;
+    throw new ExternalServiceError(summary, detail);
   }
 
   /** Build the OAuth dialog URL the user is redirected to. */

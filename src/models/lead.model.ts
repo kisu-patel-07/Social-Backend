@@ -1,5 +1,5 @@
 import { Schema, model, Document, Types } from 'mongoose';
-import { LeadStatus, Platform } from '../constants';
+import { LeadSource, LeadStatus, Platform } from '../constants';
 
 export interface ILead extends Document {
   _id: Types.ObjectId;
@@ -10,6 +10,14 @@ export interface ILead extends Document {
   externalUserId: string;
   username?: string;
   name?: string;
+  /** Profile picture URL cached from the Meta profile API. */
+  avatarUrl?: string;
+  /** How this contact first entered the workspace (comment automation vs. DM). */
+  source: LeadSource;
+  /** Last time the person engaged (comment or inbound DM). */
+  lastInteractionAt: Date;
+  /** Total comments + inbound DMs recorded for this contact. */
+  interactionCount: number;
   /** The post/media that the triggering comment was on. */
   postId?: string;
   /** Text of the comment that created the lead. */
@@ -40,6 +48,14 @@ const leadSchema = new Schema<ILead>(
     externalUserId: { type: String, required: true, index: true },
     username: { type: String, trim: true },
     name: { type: String, trim: true },
+    avatarUrl: { type: String },
+    source: {
+      type: String,
+      enum: Object.values(LeadSource),
+      default: LeadSource.COMMENT,
+    },
+    lastInteractionAt: { type: Date, default: () => new Date(), index: true },
+    interactionCount: { type: Number, default: 1 },
     postId: { type: String },
     comment: { type: String, maxlength: 2000 },
     conversation: { type: Schema.Types.ObjectId, ref: 'Conversation' },
