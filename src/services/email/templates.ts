@@ -38,17 +38,18 @@ export const emailTemplates = {
     };
   },
 
-  verifyEmail(name: string, verifyUrl: string): EmailContent {
+  verifyEmail(name: string, verifyUrl: string, otp: string): EmailContent {
     return {
-      subject: 'Verify your email address',
+      subject: `${otp} is your verification code`,
       html: layout(
         `Hi ${name},`,
-        `<p>Please confirm your email address to activate your account.</p><p>${button(
-          'Verify Email',
-          verifyUrl
-        )}</p><p style="font-size:13px;color:#64748b;">Or paste this link: ${verifyUrl}</p>`
+        `<p>Enter this code to verify your email address:</p>
+         <p style="font-size:32px;font-weight:700;letter-spacing:8px;text-align:center;background:#f1f5f9;border-radius:12px;padding:16px 8px;margin:16px 0;">${otp}</p>
+         <p style="font-size:13px;color:#64748b;">The code expires in 10 minutes.</p>
+         <p>Or verify with one click:</p><p>${button('Verify Email', verifyUrl)}</p>
+         <p style="font-size:13px;color:#64748b;">If the button doesn't work, paste this link: ${verifyUrl}</p>`
       ),
-      text: `Hi ${name}, verify your email: ${verifyUrl}`,
+      text: `Hi ${name}, your verification code is ${otp} (expires in 10 minutes). Or verify via link: ${verifyUrl}`,
     };
   },
 

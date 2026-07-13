@@ -11,9 +11,10 @@ class EmailService {
     return brevoClient.send({ to: { email: to, name }, ...c });
   }
 
-  sendVerification(to: string, name: string, verifyUrl: string): Promise<void> {
-    const c = emailTemplates.verifyEmail(name, verifyUrl);
-    return brevoClient.send({ to: { email: to, name }, ...c });
+  /** Verification email — critical: throws on send failure so the caller can react. */
+  sendVerification(to: string, name: string, verifyUrl: string, otp: string): Promise<void> {
+    const c = emailTemplates.verifyEmail(name, verifyUrl, otp);
+    return brevoClient.send({ to: { email: to, name }, ...c }, { critical: true });
   }
 
   sendPasswordReset(to: string, name: string, resetUrl: string): Promise<void> {

@@ -14,6 +14,13 @@ export interface IUser extends Document {
   facebookId?: string;
   avatarUrl?: string;
   isEmailVerified: boolean;
+  /** Hashed email-verification OTP. Excluded from queries by default. */
+  emailOtpHash?: string;
+  emailOtpExpiresAt?: Date;
+  /** Failed OTP attempts since the last code was issued. */
+  emailOtpAttempts?: number;
+  /** When the last verification email was sent (resend cooldown). */
+  emailOtpSentAt?: Date;
   lastLoginAt?: Date;
   /** Salt rotated on logout-all / password change to invalidate refresh tokens. */
   tokenVersion: number;
@@ -50,6 +57,10 @@ const userSchema = new Schema<IUser>(
     facebookId: { type: String, index: true, sparse: true },
     avatarUrl: { type: String },
     isEmailVerified: { type: Boolean, default: false },
+    emailOtpHash: { type: String, select: false },
+    emailOtpExpiresAt: { type: Date, select: false },
+    emailOtpAttempts: { type: Number, default: 0, select: false },
+    emailOtpSentAt: { type: Date, select: false },
     lastLoginAt: { type: Date },
     tokenVersion: { type: Number, default: 0 },
     notificationPreferences: {
@@ -67,6 +78,10 @@ userSchema.set('toJSON', {
   transform: (_doc, ret) => {
     const obj = ret as unknown as Record<string, unknown>;
     delete obj.password;
+    delete obj.emailOtpHash;
+    delete obj.emailOtpExpiresAt;
+    delete obj.emailOtpAttempts;
+    delete obj.emailOtpSentAt;
     delete obj.__v;
     return obj;
   },

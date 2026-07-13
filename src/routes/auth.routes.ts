@@ -11,6 +11,7 @@ import {
   resendVerificationSchema,
   resetPasswordSchema,
   verifyEmailSchema,
+  verifyOtpSchema,
 } from '../validators/auth.validator';
 
 const router = Router();
@@ -20,6 +21,7 @@ router.post('/login', authLimiter, validate(loginSchema), authController.login);
 router.post('/refresh', validate(refreshSchema), authController.refresh);
 router.post('/logout', authController.logout);
 router.post('/verify-email', validate(verifyEmailSchema), authController.verifyEmail);
+router.post('/verify-otp', authLimiter, validate(verifyOtpSchema), authController.verifyOtp);
 router.post(
   '/resend-verification',
   authLimiter,

@@ -13,6 +13,14 @@ class UserRepository extends BaseRepository<IUser> {
     return query.exec();
   }
 
+  /** Find a user by email including the (normally hidden) email-OTP fields. */
+  findByEmailWithOtp(email: string): Promise<IUser | null> {
+    return this.model
+      .findOne({ email: email.toLowerCase() })
+      .select('+emailOtpHash +emailOtpExpiresAt +emailOtpAttempts +emailOtpSentAt')
+      .exec();
+  }
+
   findByGoogleId(googleId: string): Promise<IUser | null> {
     return this.findOne({ googleId });
   }

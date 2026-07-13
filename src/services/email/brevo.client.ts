@@ -1,12 +1,23 @@
 import axios, { AxiosInstance } from 'axios';
 import { env } from '../../config/env';
 import { logger } from '../../config/logger';
+import { ExternalServiceError } from '../../utils/AppError';
 
 export interface SendEmailParams {
   to: { email: string; name?: string };
   subject: string;
   html: string;
   text?: string;
+}
+
+export interface SendEmailOptions {
+  /**
+   * Critical emails (e.g. verification codes) must not fail silently: on send
+   * failure `send()` throws so the caller can react. Non-critical emails
+   * (welcome, digests, notifications) are best-effort and swallow errors so a
+   * mail outage never breaks the primary request.
+   */
+  critical?: boolean;
 }
 
 /**
@@ -29,20 +40,25 @@ class BrevoClient {
     });
   }
 
-  async send(params: SendEmailParams): Promise<void> {
+  async send(params: SendEmailParams, options: SendEmailOptions = {}): Promise<void> {
     const dryRun = env.EMAIL_DRY_RUN || !env.BREVO_API_KEY;
 
     if (dryRun) {
+      // Log the text body too so dev flows (verification codes/links) are usable.
       logger.info('[email:dry-run] would send email', {
         to: params.to.email,
         subject: params.subject,
+        body: params.text,
       });
       return;
     }
 
+    const replyTo = env.BREVO_REPLY_TO || env.BREVO_SENDER_EMAIL;
+
     try {
       await this.http.post('/smtp/email', {
         sender: { email: env.BREVO_SENDER_EMAIL, name: env.BREVO_SENDER_NAME },
+        replyTo: { email: replyTo, name: env.BREVO_SENDER_NAME },
         to: [{ email: params.to.email, name: params.to.name }],
         subject: params.subject,
         htmlContent: params.html,
@@ -50,9 +66,13 @@ class BrevoClient {
       });
       logger.info('Email sent', { to: params.to.email, subject: params.subject });
     } catch (error) {
-      // Email failures should not break the primary request flow; log and move on.
       const detail = axios.isAxiosError(error) ? error.response?.data : error;
       logger.error('Failed to send email via Brevo', { to: params.to.email, detail });
+      // Critical emails propagate so the flow can tell the user it failed;
+      // non-critical ones are best-effort and swallowed.
+      if (options.critical) {
+        throw new ExternalServiceError('Failed to send email', detail);
+      }
     }
   }
 }

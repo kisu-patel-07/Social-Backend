@@ -36,6 +36,16 @@ export const verifyEmailSchema = z.object({
   }),
 });
 
+export const verifyOtpSchema = z.object({
+  body: z.object({
+    email: z.string().trim().toLowerCase().email(),
+    code: z
+      .string()
+      .trim()
+      .regex(/^\d{6}$/, 'Code must be 6 digits'),
+  }),
+});
+
 export const resendVerificationSchema = z.object({
   body: z.object({
     email: z.string().trim().toLowerCase().email(),

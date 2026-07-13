@@ -9,13 +9,12 @@ import { clearRefreshCookie, setRefreshCookie } from '../utils/cookies';
 
 export const authController = {
   register: asyncHandler(async (req: Request, res: Response) => {
-    const { user, tokens } = await authService.register(req.body, req.ip);
-    setRefreshCookie(res, tokens.refreshToken);
-    sendCreated(
-      res,
-      { user, accessToken: tokens.accessToken },
-      'Account created. Please verify your email.'
-    );
+    // No session is issued at registration — email must be verified first.
+    const { user, emailSent } = await authService.register(req.body, req.ip);
+    const message = emailSent
+      ? 'Account created. Check your email for a verification code.'
+      : 'Account created, but we could not send the verification email. Please use Resend.';
+    sendCreated(res, { user, emailSent }, message);
   }),
 
   login: asyncHandler(async (req: Request, res: Response) => {
@@ -38,8 +37,15 @@ export const authController = {
   }),
 
   verifyEmail: asyncHandler(async (req: Request, res: Response) => {
-    await authService.verifyEmail(req.body.token);
-    sendSuccess(res, null, 'Email verified');
+    const { user, tokens } = await authService.verifyEmail(req.body.token);
+    setRefreshCookie(res, tokens.refreshToken);
+    sendSuccess(res, { user, accessToken: tokens.accessToken }, 'Email verified');
+  }),
+
+  verifyOtp: asyncHandler(async (req: Request, res: Response) => {
+    const { user, tokens } = await authService.verifyEmailOtp(req.body.email, req.body.code);
+    setRefreshCookie(res, tokens.refreshToken);
+    sendSuccess(res, { user, accessToken: tokens.accessToken }, 'Email verified');
   }),
 
   resendVerification: asyncHandler(async (req: Request, res: Response) => {

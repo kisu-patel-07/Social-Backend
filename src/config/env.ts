@@ -27,6 +27,8 @@ const envSchema = z.object({
   BREVO_API_KEY: z.string().default(''),
   BREVO_SENDER_EMAIL: z.string().default('no-reply@example.com'),
   BREVO_SENDER_NAME: z.string().default('Social Automation'),
+  /** Optional: where user replies go (defaults to the sender). Use a real inbox. */
+  BREVO_REPLY_TO: z.string().email().optional().or(z.literal('')),
   EMAIL_DRY_RUN: z
     .enum(['true', 'false'])
     .default('true')

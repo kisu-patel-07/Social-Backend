@@ -15,7 +15,9 @@ import {
   workspaceRepository,
 } from '../repositories';
 import { AuthTokens, JwtPayload } from '../types/auth.types';
+import { HttpStatus } from '../constants/httpStatus';
 import {
+  AppError,
   BadRequestError,
   ConflictError,
   NotFoundError,
@@ -29,6 +31,7 @@ import {
   verifyEmailToken,
   verifyRefreshToken,
 } from '../utils/jwt';
+import { generateOtp, hashOtp, verifyOtp } from '../utils/otp';
 import { comparePassword, hashPassword } from '../utils/password';
 import { activityService } from './activity.service';
 import { emailService } from './email/email.service';
@@ -43,6 +46,20 @@ interface RegisterParams {
 interface AuthResult {
   user: IUser;
   tokens: AuthTokens;
+}
+
+/** How long an email-verification OTP stays valid. */
+const OTP_TTL_MINUTES = 10;
+/** Wrong-code attempts allowed before a new code must be requested. */
+const OTP_MAX_ATTEMPTS = 5;
+/** Minimum seconds between verification emails (resend cooldown). */
+const OTP_RESEND_COOLDOWN_SECONDS = 60;
+
+/** 403 raised when a user tries to sign in before verifying their email. */
+function emailNotVerifiedError(): AppError {
+  return new AppError('Please verify your email address to continue', HttpStatus.FORBIDDEN, {
+    errorCode: 'EMAIL_NOT_VERIFIED',
+  });
 }
 
 class AuthService {
@@ -84,18 +101,49 @@ class AuthService {
     return workspace._id;
   }
 
-  /** Send the email-verification message for a user. */
-  private async dispatchVerification(user: IUser): Promise<void> {
+  /**
+   * Send the email-verification message for a user. The email carries both a
+   * one-click link and a 6-digit code; the code (hashed) and its expiry are
+   * stored on the user. Respects the resend cooldown unless `force` is set.
+   *
+   * Returns whether a code was actually emailed:
+   * - false when skipped by the resend cooldown, or when the send failed.
+   * Never throws — callers use the boolean to decide what to tell the user.
+   */
+  private async dispatchVerification(user: IUser, force = false): Promise<boolean> {
+    if (!force && user.emailOtpSentAt) {
+      const elapsed = (Date.now() - user.emailOtpSentAt.getTime()) / 1000;
+      if (elapsed < OTP_RESEND_COOLDOWN_SECONDS) return false;
+    }
+
+    const otp = generateOtp();
+    await userRepository.updateById(user._id, {
+      $set: {
+        emailOtpHash: hashOtp(otp),
+        emailOtpExpiresAt: new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000),
+        emailOtpAttempts: 0,
+        emailOtpSentAt: new Date(),
+      },
+    });
+
     const token = signEmailToken(
       user._id.toString(),
       TokenType.EMAIL_VERIFICATION,
       env.EMAIL_TOKEN_EXPIRES_IN
     );
     const verifyUrl = `${env.CLIENT_URL.split(',')[0]}/verify-email?token=${token}`;
-    await emailService.sendVerification(user.email, user.name, verifyUrl);
+
+    try {
+      await emailService.sendVerification(user.email, user.name, verifyUrl, otp);
+      return true;
+    } catch {
+      // Already logged in the mail client. The OTP is stored, so the user can
+      // still verify once delivery is fixed / they hit "Resend".
+      return false;
+    }
   }
 
-  async register(params: RegisterParams, ip?: string): Promise<AuthResult> {
+  async register(params: RegisterParams, ip?: string): Promise<{ user: IUser; emailSent: boolean }> {
     const existing = await userRepository.findByEmail(params.email);
     if (existing) {
       throw new ConflictError('An account with this email already exists');
@@ -120,19 +168,21 @@ class AuthService {
       authProviders: [AuthProvider.LOCAL],
     });
 
-    await Promise.all([
-      this.dispatchVerification(user),
-      emailService.sendWelcome(user.email, user.name),
-      activityService.log({
-        workspace: workspaceId.toString(),
-        user: user._id.toString(),
-        action: ActivityAction.USER_REGISTERED,
-        description: `${user.name} registered`,
-        ip,
-      }),
-    ]);
+    await activityService.log({
+      workspace: workspaceId.toString(),
+      user: user._id.toString(),
+      action: ActivityAction.USER_REGISTERED,
+      description: `${user.name} registered`,
+      ip,
+    });
 
-    return { user, tokens: this.issueTokens(user) };
+    // Send the verification code and report whether it actually went out, so
+    // the client can guide the user to "Resend" instead of waiting on a code
+    // that never arrives. Welcome email is deferred until they verify.
+    const emailSent = await this.dispatchVerification(user);
+
+    // No session yet — the account must verify its email before signing in.
+    return { user, emailSent };
   }
 
   async login(email: string, password: string, ip?: string): Promise<AuthResult> {
@@ -144,6 +194,14 @@ class AuthService {
     const ok = await comparePassword(password, user.password);
     if (!ok) {
       throw new UnauthorizedError('Invalid email or password');
+    }
+
+    if (!user.isEmailVerified) {
+      // Hard block: no session until the email is verified. Re-send a fresh
+      // code (cooldown-guarded) so the verify screen the user lands on works.
+      const withOtp = await userRepository.findByEmailWithOtp(email);
+      if (withOtp) await this.dispatchVerification(withOtp);
+      throw emailNotVerifiedError();
     }
 
     await userRepository.updateById(user._id, { lastLoginAt: new Date() });
@@ -166,19 +224,69 @@ class AuthService {
     if (!user) {
       throw new UnauthorizedError('User no longer exists');
     }
+    // Sessions issued before this policy shipped must also verify.
+    if (!user.isEmailVerified) throw emailNotVerifiedError();
     return this.issueTokens(user);
   }
 
-  async verifyEmail(token: string): Promise<void> {
+  /** Mark a user verified, clear OTP state, and send the welcome email. */
+  private async markVerified(user: IUser): Promise<IUser> {
+    const updated = await userRepository.updateById(user._id, {
+      $set: { isEmailVerified: true },
+      $unset: { emailOtpHash: '', emailOtpExpiresAt: '', emailOtpSentAt: '' },
+    });
+    // Welcome only after they've proven the mailbox — best-effort, never blocks.
+    void emailService.sendWelcome(user.email, user.name);
+    return updated ?? user;
+  }
+
+  /**
+   * Verify via the emailed link token. Proof of mailbox ownership, so a
+   * session is issued on success — the user lands signed in.
+   */
+  async verifyEmail(token: string): Promise<AuthResult> {
     const payload = verifyEmailToken(token, TokenType.EMAIL_VERIFICATION);
     const user = await userRepository.findById(payload.sub);
     if (!user) throw new NotFoundError('User not found');
-    if (user.isEmailVerified) return;
-    await userRepository.updateById(user._id, { isEmailVerified: true });
+    if (user.isEmailVerified) {
+      // Don't let old links double as permanent sign-in links.
+      throw new BadRequestError('This email is already verified. Please sign in.');
+    }
+    const verified = await this.markVerified(user);
+    return { user: verified, tokens: this.issueTokens(verified) };
+  }
+
+  /**
+   * Verify via the emailed 6-digit code. Codes are hashed at rest, expire
+   * after OTP_TTL_MINUTES, and allow OTP_MAX_ATTEMPTS wrong guesses before a
+   * fresh code must be requested. Issues a session on success.
+   */
+  async verifyEmailOtp(email: string, code: string): Promise<AuthResult> {
+    const user = await userRepository.findByEmailWithOtp(email);
+    // Same message for unknown email / missing code / wrong code — no oracle.
+    const invalid = new BadRequestError('Invalid or expired code. Request a new one.');
+
+    if (!user) throw invalid;
+    if (user.isEmailVerified) {
+      throw new BadRequestError('This email is already verified. Please sign in.');
+    }
+    if (!user.emailOtpHash || !user.emailOtpExpiresAt) throw invalid;
+    if (user.emailOtpExpiresAt.getTime() < Date.now()) throw invalid;
+    if ((user.emailOtpAttempts ?? 0) >= OTP_MAX_ATTEMPTS) {
+      throw new BadRequestError('Too many incorrect attempts. Request a new code.');
+    }
+
+    if (!verifyOtp(code, user.emailOtpHash)) {
+      await userRepository.updateById(user._id, { $inc: { emailOtpAttempts: 1 } });
+      throw invalid;
+    }
+
+    const verified = await this.markVerified(user);
+    return { user: verified, tokens: this.issueTokens(verified) };
   }
 
   async resendVerification(email: string): Promise<void> {
-    const user = await userRepository.findByEmail(email);
+    const user = await userRepository.findByEmailWithOtp(email);
     // Do not reveal whether the email exists.
     if (!user || user.isEmailVerified) return;
     await this.dispatchVerification(user);
