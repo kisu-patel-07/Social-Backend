@@ -16,6 +16,7 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "seed:plans": "ts-node src/scripts/seedPlans.ts",
+    "admin:promote": "ts-node src/scripts/promoteAdmin.ts",
     "job:refresh-tokens": "ts-node src/scripts/refreshTokens.ts"
   },
   "keywords": [

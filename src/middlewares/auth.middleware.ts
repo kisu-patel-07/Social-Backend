@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import { UserRole } from '../constants';
+import { userRepository } from '../repositories';
 import { ForbiddenError, UnauthorizedError } from '../utils/AppError';
 import { verifyAccessToken } from '../utils/jwt';
 
@@ -20,6 +21,32 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
     email: payload.email,
   };
   next();
+}
+
+/**
+ * Restrict a route to platform super admins. Must run after `authenticate`.
+ *
+ * Deliberately re-checks the database (not the JWT) on every request so that
+ * revoking the flag or suspending the account locks the panel out immediately,
+ * with no stale-token window. Admin traffic is low; the lookup is cheap.
+ */
+export async function requireSuperAdmin(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.user) {
+      throw new UnauthorizedError();
+    }
+    const user = await userRepository.findById(req.user.id);
+    if (!user || user.isSuspended || !user.isSuperAdmin) {
+      throw new ForbiddenError('Admin access required');
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 /**

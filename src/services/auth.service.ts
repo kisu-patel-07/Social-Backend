@@ -62,6 +62,13 @@ function emailNotVerifiedError(): AppError {
   });
 }
 
+/** 403 raised when a suspended account tries to sign in or refresh. */
+function accountSuspendedError(): AppError {
+  return new AppError('This account has been suspended. Contact support.', HttpStatus.FORBIDDEN, {
+    errorCode: 'ACCOUNT_SUSPENDED',
+  });
+}
+
 class AuthService {
   /** Issue an access + refresh token pair for a user. */
   private issueTokens(user: IUser): AuthTokens {
@@ -196,6 +203,10 @@ class AuthService {
       throw new UnauthorizedError('Invalid email or password');
     }
 
+    if (user.isSuspended) {
+      throw accountSuspendedError();
+    }
+
     if (!user.isEmailVerified) {
       // Hard block: no session until the email is verified. Re-send a fresh
       // code (cooldown-guarded) so the verify screen the user lands on works.
@@ -224,6 +235,8 @@ class AuthService {
     if (!user) {
       throw new UnauthorizedError('User no longer exists');
     }
+    // Suspension takes effect as soon as the current access token expires.
+    if (user.isSuspended) throw accountSuspendedError();
     // Sessions issued before this policy shipped must also verify.
     if (!user.isEmailVerified) throw emailNotVerifiedError();
     return this.issueTokens(user);
@@ -356,6 +369,7 @@ class AuthService {
     }
 
     if (!user) throw new BadRequestError('Unable to authenticate with Facebook');
+    if (user.isSuspended) throw accountSuspendedError();
     return { user, tokens: this.issueTokens(user) };
   }
 }

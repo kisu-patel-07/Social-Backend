@@ -10,6 +10,7 @@ import analyticsRoutes from './analytics.routes';
 import settingsRoutes from './settings.routes';
 import subscriptionRoutes from './subscription.routes';
 import webhookRoutes from './webhook.routes';
+import adminRoutes from './admin.routes';
 
 const router = Router();
 
@@ -28,5 +29,6 @@ router.use('/analytics', analyticsRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/subscriptions', subscriptionRoutes);
 router.use('/webhooks', webhookRoutes);
+router.use('/admin', adminRoutes);
 
 export default router;

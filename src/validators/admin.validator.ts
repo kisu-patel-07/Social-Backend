@@ -1,0 +1,115 @@
+import { z } from 'zod';
+import { BillingInterval, SubscriptionStatus } from '../constants';
+import { idParamSchema, objectIdSchema, paginationQuerySchema } from './common.validator';
+
+/** GET /admin/users query. */
+export const adminListUsersSchema = z.object({
+  query: paginationQuerySchema.extend({
+    verified: z.enum(['true', 'false']).optional(),
+    suspended: z.enum(['true', 'false']).optional(),
+  }),
+});
+
+/** PATCH /admin/users/:id/suspend */
+export const adminSuspendUserSchema = z.object({
+  params: idParamSchema,
+  body: z.object({
+    suspended: z.boolean(),
+  }),
+});
+
+/** GET /admin/subscriptions query. */
+export const adminListSubscriptionsSchema = z.object({
+  query: paginationQuerySchema.extend({
+    status: z.nativeEnum(SubscriptionStatus).optional(),
+  }),
+});
+
+/** PATCH /admin/subscriptions/:id */
+export const adminUpdateSubscriptionSchema = z.object({
+  params: idParamSchema,
+  body: z
+    .object({
+      planId: objectIdSchema.optional(),
+      status: z.nativeEnum(SubscriptionStatus).optional(),
+      extendDays: z.coerce.number().int().min(1).max(365).optional(),
+    })
+    .refine((b) => b.planId || b.status || b.extendDays, {
+      message: 'Provide at least one of planId, status or extendDays',
+    }),
+});
+
+const planLimitsSchema = z.object({
+  connectedAccounts: z.coerce.number().int().min(-1),
+  automations: z.coerce.number().int().min(-1),
+  monthlyMessages: z.coerce.number().int().min(-1),
+  teamMembers: z.coerce.number().int().min(-1),
+});
+
+/** POST /admin/plans */
+export const adminCreatePlanSchema = z.object({
+  body: z.object({
+    code: z
+      .string()
+      .trim()
+      .min(1)
+      .max(40)
+      .regex(/^[a-z0-9_-]+$/i, 'Use letters, numbers, dashes or underscores'),
+    name: z.string().trim().min(1).max(80),
+    description: z.string().trim().max(300).optional(),
+    priceAmount: z.coerce.number().int().min(0),
+    currency: z.string().trim().length(3).optional(),
+    interval: z.nativeEnum(BillingInterval).optional(),
+    limits: planLimitsSchema.partial().optional(),
+    features: z.array(z.string().trim().min(1).max(120)).max(20).optional(),
+    isActive: z.boolean().optional(),
+    sortOrder: z.coerce.number().int().optional(),
+  }),
+});
+
+/** PUT /admin/plans/:id — everything optional. */
+export const adminUpdatePlanSchema = z.object({
+  params: idParamSchema,
+  body: adminCreatePlanSchema.shape.body.partial(),
+});
+
+/** GET /admin/activity query. */
+export const adminListActivitySchema = z.object({
+  query: paginationQuerySchema.extend({
+    action: z.string().trim().max(60).optional(),
+    workspaceId: objectIdSchema.optional(),
+  }),
+});
+
+/** GET /admin/automations query. */
+export const adminListAutomationsSchema = z.object({
+  query: paginationQuerySchema.extend({
+    status: z.enum(['active', 'paused', 'draft']).optional(),
+    kind: z.enum(['classic', 'studio']).optional(),
+  }),
+});
+
+/** PATCH /admin/automations/:id/status */
+export const adminAutomationStatusSchema = z.object({
+  params: idParamSchema,
+  body: z.object({
+    kind: z.enum(['classic', 'studio']),
+    status: z.enum(['active', 'paused']),
+  }),
+});
+
+/** POST /admin/broadcast */
+export const adminBroadcastSchema = z.object({
+  body: z.object({
+    title: z.string().trim().min(3).max(120),
+    body: z.string().trim().min(3).max(500),
+    link: z
+      .string()
+      .trim()
+      .max(300)
+      .regex(/^\//, 'Link must be an in-app path starting with /')
+      .optional(),
+    audience: z.enum(['all', 'verified']),
+    planId: objectIdSchema.optional(),
+  }),
+});

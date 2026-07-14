@@ -14,6 +14,14 @@ export interface IUser extends Document {
   facebookId?: string;
   avatarUrl?: string;
   isEmailVerified: boolean;
+  /**
+   * Platform-level operator flag, distinct from the workspace `role`.
+   * Grants access to the /admin panel; never assignable via the public API.
+   */
+  isSuperAdmin: boolean;
+  /** Suspended users cannot sign in or refresh a session. */
+  isSuspended: boolean;
+  suspendedAt?: Date;
   /** Hashed email-verification OTP. Excluded from queries by default. */
   emailOtpHash?: string;
   emailOtpExpiresAt?: Date;
@@ -57,6 +65,9 @@ const userSchema = new Schema<IUser>(
     facebookId: { type: String, index: true, sparse: true },
     avatarUrl: { type: String },
     isEmailVerified: { type: Boolean, default: false },
+    isSuperAdmin: { type: Boolean, default: false, index: true },
+    isSuspended: { type: Boolean, default: false },
+    suspendedAt: { type: Date },
     emailOtpHash: { type: String, select: false },
     emailOtpExpiresAt: { type: Date, select: false },
     emailOtpAttempts: { type: Number, default: 0, select: false },

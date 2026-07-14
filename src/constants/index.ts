@@ -145,6 +145,18 @@ export enum ActivityAction {
   LEAD_CREATED = 'lead.created',
   LEAD_UPDATED = 'lead.updated',
   MESSAGE_SENT = 'message.sent',
+  // Platform-admin actions (performed from the /admin panel).
+  ADMIN_USER_SUSPENDED = 'admin.user_suspended',
+  ADMIN_USER_UNSUSPENDED = 'admin.user_unsuspended',
+  ADMIN_USER_VERIFIED = 'admin.user_verified',
+  ADMIN_USER_DELETED = 'admin.user_deleted',
+  ADMIN_SUBSCRIPTION_UPDATED = 'admin.subscription_updated',
+  ADMIN_PLAN_CREATED = 'admin.plan_created',
+  ADMIN_PLAN_UPDATED = 'admin.plan_updated',
+  ADMIN_AUTOMATION_PAUSED = 'admin.automation_paused',
+  ADMIN_AUTOMATION_RESUMED = 'admin.automation_resumed',
+  ADMIN_WEBHOOK_RETRIED = 'admin.webhook_retried',
+  ADMIN_BROADCAST_SENT = 'admin.broadcast_sent',
 }
 
 export enum TokenType {

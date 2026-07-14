@@ -10,6 +10,7 @@ export { settingsService } from './settings.service';
 export { subscriptionService } from './subscription.service';
 export { notificationService } from './notification.service';
 export { activityService } from './activity.service';
+export { adminService } from './admin.service';
 export { webhookService } from './webhook.service';
 export { emailService } from './email/email.service';
 export { metaService, metaClient } from './meta';
