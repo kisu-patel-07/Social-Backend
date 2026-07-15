@@ -46,6 +46,10 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().default(''),
   GOOGLE_CLIENT_SECRET: z.string().default(''),
 
+  /** Razorpay checkout. Payments stay disabled (request-upgrade fallback) until both are set. */
+  RAZORPAY_KEY_ID: z.string().default(''),
+  RAZORPAY_KEY_SECRET: z.string().default(''),
+
   /** Shared secret for scheduled-job endpoints (Vercel Cron sends it as a Bearer token). */
   CRON_SECRET: z.string().default(''),
 

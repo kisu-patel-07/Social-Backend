@@ -104,17 +104,18 @@ class AuthService {
       owner: ownerId,
     });
 
-    // Attach a trial of the cheapest active plan, if one is seeded.
+    // Every new workspace starts on the Free plan (active, no trial); users
+    // upgrade to a paid plan via Razorpay checkout whenever they need more.
     const plan =
       (await planRepository.findByCode('free')) ?? (await planRepository.listActive())[0];
     if (plan) {
       await subscriptionRepository.create({
         workspace: workspace._id,
         plan: plan._id,
-        status: SubscriptionStatus.TRIALING,
+        status: SubscriptionStatus.ACTIVE,
         currentPeriodStart: new Date(),
-        currentPeriodEnd: addDays(new Date(), 14),
-        trialEndsAt: addDays(new Date(), 14),
+        // Free never lapses; a far-future period end keeps the model happy.
+        currentPeriodEnd: addDays(new Date(), 3650),
       });
     }
 

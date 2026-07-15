@@ -116,6 +116,8 @@ export enum SubscriptionStatus {
 export enum BillingInterval {
   MONTHLY = 'monthly',
   YEARLY = 'yearly',
+  /** Fixed validity pack — plan.durationDays sets the length (e.g. 7-day pack). */
+  DAYS = 'days',
 }
 
 export enum InvoiceStatus {

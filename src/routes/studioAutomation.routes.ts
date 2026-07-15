@@ -4,6 +4,7 @@ import { studioAutomationController } from '../controllers/studioAutomation.cont
 import { authenticate } from '../middlewares';
 import { validate } from '../middlewares/validate.middleware';
 import { requireFeature } from '../services/feature.service';
+import { requireActiveSubscription, requireEntitlement } from '../services/subscription.service';
 import { idParamSchema } from '../validators/common.validator';
 import {
   createStudioAutomationSchema,
@@ -14,24 +15,37 @@ import {
 
 const router = Router();
 
-// Studio is behind the 'studio' feature flag (admin-managed rollout/kill switch).
-router.use(authenticate, requireFeature('studio'));
+// Studio is behind the 'studio' feature flag (admin rollout/kill switch)
+// AND the plan entitlement (which plans include Studio).
+router.use(authenticate, requireFeature('studio'), requireEntitlement('studio'));
 
-router.post('/', validate(createStudioAutomationSchema), studioAutomationController.create);
+router.post(
+  '/',
+  requireActiveSubscription,
+  validate(createStudioAutomationSchema),
+  studioAutomationController.create
+);
 router.get('/', validate(listStudioAutomationsSchema), studioAutomationController.list);
 router.get(
   '/:id',
   validate(z.object({ params: idParamSchema })),
   studioAutomationController.getById
 );
-router.put('/:id', validate(updateStudioAutomationSchema), studioAutomationController.update);
+router.put(
+  '/:id',
+  requireActiveSubscription,
+  validate(updateStudioAutomationSchema),
+  studioAutomationController.update
+);
 router.patch(
   '/:id/status',
+  requireActiveSubscription,
   validate(toggleStudioAutomationSchema),
   studioAutomationController.setStatus
 );
 router.post(
   '/:id/duplicate',
+  requireActiveSubscription,
   validate(z.object({ params: idParamSchema })),
   studioAutomationController.duplicate
 );

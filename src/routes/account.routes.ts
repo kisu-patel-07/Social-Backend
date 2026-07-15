@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { accountController } from '../controllers/account.controller';
 import { authenticate } from '../middlewares';
 import { validate } from '../middlewares/validate.middleware';
+import { requireActiveSubscription } from '../services/subscription.service';
 import {
   accountIdParamSchema,
   connectAccountSchema,
@@ -19,8 +20,19 @@ router.get('/oauth/callback', validate(oauthCallbackSchema), accountController.o
 router.use(authenticate);
 
 router.get('/', accountController.list);
-router.get('/oauth/url', validate(startOAuthSchema), accountController.startOAuth);
-router.post('/connect', validate(connectAccountSchema), accountController.connect);
+// Connecting new accounts is gated on an active trial/subscription.
+router.get(
+  '/oauth/url',
+  requireActiveSubscription,
+  validate(startOAuthSchema),
+  accountController.startOAuth
+);
+router.post(
+  '/connect',
+  requireActiveSubscription,
+  validate(connectAccountSchema),
+  accountController.connect
+);
 router.get('/:id', validate(accountIdParamSchema), accountController.getById);
 router.get('/:id/media', validate(listMediaSchema), accountController.listMedia);
 router.post(

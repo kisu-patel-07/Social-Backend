@@ -7,12 +7,13 @@ import {
   StudioPostScope,
 } from '../constants';
 import { IStudioAutomation, IStudioButton } from '../models/studioAutomation.model';
-import { socialAccountRepository } from '../repositories';
+import { automationRepository, socialAccountRepository } from '../repositories';
 import { studioAutomationRepository } from '../repositories/studioAutomation.repository';
 import { AuthUser } from '../types/auth.types';
 import { PaginatedResult, PaginationOptions } from '../types/common.types';
 import { BadRequestError, NotFoundError } from '../utils/AppError';
 import { activityService } from './activity.service';
+import { assertWithinLimit, subscriptionService } from './subscription.service';
 
 interface StudioAutomationParams {
   name: string;
@@ -75,6 +76,14 @@ class StudioAutomationService {
   }
 
   async create(user: AuthUser, params: StudioAutomationParams): Promise<IStudioAutomation> {
+    // Plan gate: classic + Studio automations share one plan limit.
+    const { limits } = await subscriptionService.getEntitlements(user.workspaceId);
+    const [classicCount, studioCount] = await Promise.all([
+      automationRepository.count({ workspace: user.workspaceId }),
+      studioAutomationRepository.count({ workspace: user.workspaceId }),
+    ]);
+    assertWithinLimit(classicCount + studioCount, limits.automations, 'automation(s)');
+
     const account = await socialAccountRepository.findOne({
       _id: params.socialAccountId,
       workspace: user.workspaceId,

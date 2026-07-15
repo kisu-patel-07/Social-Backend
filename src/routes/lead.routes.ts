@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { leadController } from '../controllers/lead.controller';
 import { authenticate } from '../middlewares';
 import { validate } from '../middlewares/validate.middleware';
+import { requireEntitlement } from '../services/subscription.service';
 import {
   bulkDeleteLeadsSchema,
   bulkUpdateLeadsSchema,
@@ -18,7 +19,12 @@ router.use(authenticate);
 
 router.get('/', validate(listLeadsSchema), leadController.list);
 router.get('/stats', leadController.stats);
-router.get('/export', validate(exportLeadsSchema), leadController.exportCsv);
+router.get(
+  '/export',
+  requireEntitlement('csvExport'),
+  validate(exportLeadsSchema),
+  leadController.exportCsv
+);
 router.patch('/bulk', validate(bulkUpdateLeadsSchema), leadController.bulkUpdate);
 router.post('/bulk-delete', validate(bulkDeleteLeadsSchema), leadController.bulkDelete);
 router.get('/:id', validate(z.object({ params: idParamSchema })), leadController.getById);

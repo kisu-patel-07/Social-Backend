@@ -30,6 +30,7 @@ import { emailService } from './email/email.service';
 import { IncomingComment, IncomingMessage, metaClient, parseWebhookPayload } from './meta';
 import { notificationService } from './notification.service';
 import { studioEngineService } from './studioEngine.service';
+import { subscriptionService } from './subscription.service';
 
 /**
  * The automation engine. Processes normalized Meta webhook events:
@@ -142,6 +143,39 @@ class WebhookService {
       externalId: comment.commentId,
       postId: comment.postId,
     });
+
+    // Trial/subscription gate: the comment stays recorded in the inbox, but
+    // no automated replies go out for lapsed workspaces.
+    const access = await subscriptionService.getAccessState(account.workspace.toString());
+    if (!access.allowed) {
+      logger.info('Automation skipped: subscription inactive', {
+        workspace: account.workspace.toString(),
+        reason: access.reason,
+        commentId: comment.commentId,
+      });
+      return;
+    }
+
+    // Plan volume gate: stop automated replies once the monthly quota is spent.
+    const { limits } = await subscriptionService.getEntitlements(account.workspace.toString());
+    if (limits.monthlyMessages !== -1) {
+      const startOfMonth = new Date();
+      startOfMonth.setDate(1);
+      startOfMonth.setHours(0, 0, 0, 0);
+      const sentThisMonth = await messageRepository.count({
+        workspace: account.workspace,
+        direction: MessageDirection.OUTBOUND,
+        createdAt: { $gte: startOfMonth },
+      });
+      if (sentThisMonth >= limits.monthlyMessages) {
+        logger.info('Automation skipped: monthly reply limit reached', {
+          workspace: account.workspace.toString(),
+          limit: limits.monthlyMessages,
+          commentId: comment.commentId,
+        });
+        return;
+      }
+    }
 
     const automations = await automationRepository.findActiveMatching(
       account._id.toString(),

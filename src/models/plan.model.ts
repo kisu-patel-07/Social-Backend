@@ -12,6 +12,8 @@ export interface IPlan extends Document {
   priceAmount: number;
   currency: string;
   interval: BillingInterval;
+  /** Validity length in days when interval is DAYS (day-wise packs). */
+  durationDays?: number;
   /** Feature limits enforced by the app. -1 means unlimited. */
   limits: {
     connectedAccounts: number;
@@ -19,6 +21,12 @@ export interface IPlan extends Document {
     monthlyMessages: number;
     teamMembers: number;
   };
+  /** On/off features included in this plan, enforced server-side. */
+  entitlements: {
+    studio: boolean;
+    csvExport: boolean;
+  };
+  /** Marketing bullet points shown on the pricing card. */
   features: string[];
   isActive: boolean;
   /** Sort order for pricing tables. */
@@ -39,11 +47,17 @@ const planSchema = new Schema<IPlan>(
       enum: Object.values(BillingInterval),
       default: BillingInterval.MONTHLY,
     },
+    durationDays: { type: Number, min: 1, max: 365 },
     limits: {
       connectedAccounts: { type: Number, default: 1 },
       automations: { type: Number, default: 3 },
       monthlyMessages: { type: Number, default: 500 },
       teamMembers: { type: Number, default: 1 },
+    },
+    entitlements: {
+      // Default true so plans created before entitlements existed stay unrestricted.
+      studio: { type: Boolean, default: true },
+      csvExport: { type: Boolean, default: true },
     },
     features: { type: [String], default: [] },
     isActive: { type: Boolean, default: true },

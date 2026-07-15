@@ -11,6 +11,7 @@ import { analyticsService } from './analytics.service';
 import { metaClient, metaService } from './meta';
 import { InstagramMedia, InstagramMediaPage } from './meta/meta.types';
 import { notificationService } from './notification.service';
+import { assertWithinLimit, subscriptionService } from './subscription.service';
 
 interface ConnectAccountParams {
   platform: Platform;
@@ -160,6 +161,11 @@ class AccountService {
 
   /** Persist a selected Page / IG business account and subscribe webhooks. */
   async connect(user: AuthUser, params: ConnectAccountParams): Promise<ISocialAccount> {
+    // Plan gate: covers both the manual connect API and the OAuth callback flow.
+    const { limits } = await subscriptionService.getEntitlements(user.workspaceId);
+    const activeCount = await socialAccountRepository.countActiveByWorkspace(user.workspaceId);
+    assertWithinLimit(activeCount, limits.connectedAccounts, 'connected account(s)');
+
     if (params.platform === Platform.INSTAGRAM && !params.instagramBusinessId) {
       throw new BadRequestError('instagramBusinessId is required for Instagram accounts');
     }

@@ -46,31 +46,47 @@ const planLimitsSchema = z.object({
   teamMembers: z.coerce.number().int().min(-1),
 });
 
+const planBodyBase = z.object({
+  code: z
+    .string()
+    .trim()
+    .min(1)
+    .max(40)
+    .regex(/^[a-z0-9_-]+$/i, 'Use letters, numbers, dashes or underscores'),
+  name: z.string().trim().min(1).max(80),
+  description: z.string().trim().max(300).optional(),
+  priceAmount: z.coerce.number().int().min(0),
+  currency: z.string().trim().length(3).optional(),
+  interval: z.nativeEnum(BillingInterval).optional(),
+  durationDays: z.coerce.number().int().min(1).max(365).optional(),
+  limits: planLimitsSchema.partial().optional(),
+  entitlements: z
+    .object({
+      studio: z.boolean().optional(),
+      csvExport: z.boolean().optional(),
+    })
+    .optional(),
+  features: z.array(z.string().trim().min(1).max(120)).max(20).optional(),
+  isActive: z.boolean().optional(),
+  sortOrder: z.coerce.number().int().optional(),
+});
+
+const requireDurationForDayPacks = (b: { interval?: BillingInterval; durationDays?: number }) =>
+  b.interval !== BillingInterval.DAYS || Boolean(b.durationDays);
+
 /** POST /admin/plans */
 export const adminCreatePlanSchema = z.object({
-  body: z.object({
-    code: z
-      .string()
-      .trim()
-      .min(1)
-      .max(40)
-      .regex(/^[a-z0-9_-]+$/i, 'Use letters, numbers, dashes or underscores'),
-    name: z.string().trim().min(1).max(80),
-    description: z.string().trim().max(300).optional(),
-    priceAmount: z.coerce.number().int().min(0),
-    currency: z.string().trim().length(3).optional(),
-    interval: z.nativeEnum(BillingInterval).optional(),
-    limits: planLimitsSchema.partial().optional(),
-    features: z.array(z.string().trim().min(1).max(120)).max(20).optional(),
-    isActive: z.boolean().optional(),
-    sortOrder: z.coerce.number().int().optional(),
+  body: planBodyBase.refine(requireDurationForDayPacks, {
+    message: 'durationDays is required for day-wise plans',
   }),
 });
 
 /** PUT /admin/plans/:id — everything optional. */
 export const adminUpdatePlanSchema = z.object({
   params: idParamSchema,
-  body: adminCreatePlanSchema.shape.body.partial(),
+  body: planBodyBase.partial().refine(requireDurationForDayPacks, {
+    message: 'durationDays is required for day-wise plans',
+  }),
 });
 
 /** GET /admin/activity query. */

@@ -67,7 +67,7 @@ export interface AdminOverview {
   automations: { classicActive: number; studioActive: number };
   leads: number;
   messages: { today: number; failedToday: number; last30Days: number };
-  subscriptions: { byStatus: Record<string, number>; mrrCents: number };
+  subscriptions: { byStatus: Record<string, number>; mrrCents: number; currency: string };
   /** Daily signup + message counts for the trend chart (last 14 days). */
   daily: Array<{ date: string; signups: number; messages: number }>;
   recentSignups: Array<{
@@ -120,11 +120,16 @@ interface PlanParams {
   priceAmount?: number;
   currency?: string;
   interval?: BillingInterval;
+  durationDays?: number;
   limits?: {
     connectedAccounts?: number;
     automations?: number;
     monthlyMessages?: number;
     teamMembers?: number;
+  };
+  entitlements?: {
+    studio?: boolean;
+    csvExport?: boolean;
   };
   features?: string[];
   isActive?: boolean;
@@ -298,13 +303,17 @@ class AdminService {
     const mrrCents = activeSubs.reduce((sum, sub) => {
       const plan = sub.plan as unknown as IPlan | null;
       if (!plan?.priceAmount) return sum;
-      return (
-        sum +
-        (plan.interval === BillingInterval.YEARLY
-          ? Math.round(plan.priceAmount / 12)
-          : plan.priceAmount)
-      );
+      if (plan.interval === BillingInterval.YEARLY) return sum + Math.round(plan.priceAmount / 12);
+      if (plan.interval === BillingInterval.DAYS) {
+        return sum + Math.round((plan.priceAmount * 30) / (plan.durationDays || 30));
+      }
+      return sum + plan.priceAmount;
     }, 0);
+    // Display currency for MRR: taken from the first paid plan (single-currency setup).
+    const mrrCurrency =
+      activeSubs
+        .map((sub) => (sub.plan as unknown as IPlan | null)?.currency)
+        .find((c) => Boolean(c)) ?? 'INR';
 
     const signupsByDay = new Map(signupsDaily.map((d) => [d._id, d.count]));
     const messagesByDay = new Map(messagesDaily.map((d) => [d._id, d.count]));
@@ -337,6 +346,7 @@ class AdminService {
       subscriptions: {
         byStatus: Object.fromEntries(subsByStatus.map((s) => [s._id, s.count])),
         mrrCents,
+        currency: mrrCurrency,
       },
       daily,
       recentSignups: recentSignups.map((u) => ({
@@ -598,12 +608,17 @@ class AdminService {
       if (existing) throw new ConflictError(`A plan with code "${params.code}" already exists`);
     }
 
-    // Merge nested limits so a partial update doesn't wipe the other fields.
-    const { limits, ...rest } = params;
+    // Merge nested limits/entitlements so a partial update doesn't wipe siblings.
+    const { limits, entitlements, ...rest } = params;
     const set: Record<string, unknown> = { ...rest };
     if (limits) {
       for (const [key, value] of Object.entries(limits)) {
         if (value !== undefined) set[`limits.${key}`] = value;
+      }
+    }
+    if (entitlements) {
+      for (const [key, value] of Object.entries(entitlements)) {
+        if (value !== undefined) set[`entitlements.${key}`] = value;
       }
     }
 

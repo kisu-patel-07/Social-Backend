@@ -10,6 +10,8 @@ export interface ISubscription extends Document {
   currentPeriodStart: Date;
   currentPeriodEnd: Date;
   trialEndsAt?: Date;
+  /** When the "trial ending soon" reminder was sent (dedupe for the cron job). */
+  trialEndingNotifiedAt?: Date;
   cancelAtPeriodEnd: boolean;
   canceledAt?: Date;
   /** Placeholder for a future gateway customer/subscription reference. */
@@ -38,6 +40,7 @@ const subscriptionSchema = new Schema<ISubscription>(
     currentPeriodStart: { type: Date, default: () => new Date() },
     currentPeriodEnd: { type: Date, required: true },
     trialEndsAt: { type: Date },
+    trialEndingNotifiedAt: { type: Date },
     cancelAtPeriodEnd: { type: Boolean, default: false },
     canceledAt: { type: Date },
     externalCustomerId: { type: String },

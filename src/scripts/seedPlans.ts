@@ -16,6 +16,7 @@ const plans = [
     currency: 'USD',
     interval: BillingInterval.MONTHLY,
     limits: { connectedAccounts: 1, automations: 2, monthlyMessages: 200, teamMembers: 1 },
+    entitlements: { studio: false, csvExport: false },
     features: ['1 connected account', '2 automations', 'Unified inbox', 'Basic analytics'],
     sortOrder: 0,
   },
@@ -27,6 +28,7 @@ const plans = [
     currency: 'USD',
     interval: BillingInterval.MONTHLY,
     limits: { connectedAccounts: 3, automations: 15, monthlyMessages: 5000, teamMembers: 1 },
+    entitlements: { studio: true, csvExport: true },
     features: ['3 connected accounts', '15 automations', 'CSV export', 'Email notifications'],
     sortOrder: 1,
   },
@@ -43,6 +45,7 @@ const plans = [
       monthlyMessages: 50000,
       teamMembers: 1,
     },
+    entitlements: { studio: true, csvExport: true },
     features: [
       '10 connected accounts',
       'Unlimited automations',

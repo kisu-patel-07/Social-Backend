@@ -24,6 +24,7 @@ import { activityService } from './activity.service';
 import { analyticsService } from './analytics.service';
 import { emailService } from './email/email.service';
 import { featureService } from './feature.service';
+import { subscriptionService } from './subscription.service';
 import { IncomingComment, metaClient } from './meta';
 import { notificationService } from './notification.service';
 
@@ -90,6 +91,11 @@ class StudioEngineService {
     // Honor the admin kill switch / rollout even for already-active automations.
     const studioEnabled = await featureService.isEnabled('studio', account.workspace.toString());
     if (!studioEnabled) return false;
+    // And the plan entitlement — Studio automations only run on plans that include it.
+    const { entitlements } = await subscriptionService.getEntitlements(
+      account.workspace.toString()
+    );
+    if (!entitlements.studio) return false;
 
     const candidates = await studioAutomationRepository.findActiveMatching(
       account._id.toString(),

@@ -1,12 +1,18 @@
 import { FilterQuery, Types } from 'mongoose';
 import { ActivityAction, AutomationStatus, KeywordMatchType, Platform } from '../constants';
 import { IAutomation } from '../models/automation.model';
-import { automationRepository, keywordRepository, socialAccountRepository } from '../repositories';
+import {
+  automationRepository,
+  keywordRepository,
+  socialAccountRepository,
+  studioAutomationRepository,
+} from '../repositories';
 import { AuthUser } from '../types/auth.types';
 import { PaginatedResult, PaginationOptions } from '../types/common.types';
 import { BadRequestError, ConflictError, NotFoundError } from '../utils/AppError';
 import { activityService } from './activity.service';
 import { analyticsService } from './analytics.service';
+import { assertWithinLimit, subscriptionService } from './subscription.service';
 
 interface CreateAutomationParams {
   name: string;
@@ -82,6 +88,14 @@ class AutomationService {
   }
 
   async create(user: AuthUser, params: CreateAutomationParams): Promise<IAutomation> {
+    // Plan gate: classic + Studio automations share one plan limit.
+    const { limits } = await subscriptionService.getEntitlements(user.workspaceId);
+    const [classicCount, studioCount] = await Promise.all([
+      automationRepository.count({ workspace: user.workspaceId }),
+      studioAutomationRepository.count({ workspace: user.workspaceId }),
+    ]);
+    assertWithinLimit(classicCount + studioCount, limits.automations, 'automation(s)');
+
     const account = await socialAccountRepository.findOne({
       _id: params.socialAccountId,
       workspace: user.workspaceId,
