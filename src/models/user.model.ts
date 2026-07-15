@@ -22,6 +22,11 @@ export interface IUser extends Document {
   /** Suspended users cannot sign in or refresh a session. */
   isSuspended: boolean;
   suspendedAt?: Date;
+  /** TOTP 2FA (offered to super admins). Secret excluded from queries by default. */
+  totpSecret?: string;
+  isTotpEnabled: boolean;
+  /** Internal support notes, visible ONLY in the admin panel. Excluded by default. */
+  adminNotes?: string;
   /** Hashed email-verification OTP. Excluded from queries by default. */
   emailOtpHash?: string;
   emailOtpExpiresAt?: Date;
@@ -68,6 +73,9 @@ const userSchema = new Schema<IUser>(
     isSuperAdmin: { type: Boolean, default: false, index: true },
     isSuspended: { type: Boolean, default: false },
     suspendedAt: { type: Date },
+    totpSecret: { type: String, select: false },
+    isTotpEnabled: { type: Boolean, default: false },
+    adminNotes: { type: String, select: false, maxlength: 5000 },
     emailOtpHash: { type: String, select: false },
     emailOtpExpiresAt: { type: Date, select: false },
     emailOtpAttempts: { type: Number, default: 0, select: false },
@@ -89,6 +97,8 @@ userSchema.set('toJSON', {
   transform: (_doc, ret) => {
     const obj = ret as unknown as Record<string, unknown>;
     delete obj.password;
+    delete obj.totpSecret;
+    delete obj.adminNotes;
     delete obj.emailOtpHash;
     delete obj.emailOtpExpiresAt;
     delete obj.emailOtpAttempts;

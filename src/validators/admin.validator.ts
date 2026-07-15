@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BillingInterval, SubscriptionStatus } from '../constants';
+import { BillingInterval, PaymentStatus, SubscriptionStatus } from '../constants';
 import { idParamSchema, objectIdSchema, paginationQuerySchema } from './common.validator';
 
 /** GET /admin/users query. */
@@ -95,6 +95,69 @@ export const adminAutomationStatusSchema = z.object({
   body: z.object({
     kind: z.enum(['classic', 'studio']),
     status: z.enum(['active', 'paused']),
+  }),
+});
+
+/** GET /admin/payments query. */
+export const adminListPaymentsSchema = z.object({
+  query: paginationQuerySchema.extend({
+    status: z.nativeEnum(PaymentStatus).optional(),
+  }),
+});
+
+/** PATCH /admin/features/:key */
+export const adminUpdateFeatureSchema = z.object({
+  params: z.object({
+    key: z
+      .string()
+      .trim()
+      .min(1)
+      .max(40)
+      .regex(/^[a-z0-9_-]+$/i),
+  }),
+  body: z.object({
+    mode: z.enum(['on', 'off', 'allowlist']).optional(),
+    description: z.string().trim().max(300).optional(),
+    workspaces: z.array(objectIdSchema).max(200).optional(),
+  }),
+});
+
+/** GET /admin/workspaces query (allowlist picker). */
+export const adminSearchWorkspacesSchema = z.object({
+  query: z.object({
+    search: z.string().trim().max(120).optional(),
+  }),
+});
+
+/** PATCH /admin/users/:id/notes */
+export const adminUserNotesSchema = z.object({
+  params: idParamSchema,
+  body: z.object({
+    notes: z.string().max(5000),
+  }),
+});
+
+/** GET /admin/workspaces-directory query. */
+export const adminListWorkspacesSchema = z.object({
+  query: paginationQuerySchema,
+});
+
+/** PUT /admin/banner */
+export const adminBannerSchema = z.object({
+  body: z.object({
+    enabled: z.boolean(),
+    message: z.string().trim().max(200),
+    level: z.enum(['info', 'warning', 'critical']),
+  }),
+});
+
+/** POST /admin/2fa/enable and /disable */
+export const adminTotpCodeSchema = z.object({
+  body: z.object({
+    code: z
+      .string()
+      .trim()
+      .regex(/^\d{6}$/, 'Code must be 6 digits'),
   }),
 });
 

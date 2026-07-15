@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { studioAutomationController } from '../controllers/studioAutomation.controller';
 import { authenticate } from '../middlewares';
 import { validate } from '../middlewares/validate.middleware';
+import { requireFeature } from '../services/feature.service';
 import { idParamSchema } from '../validators/common.validator';
 import {
   createStudioAutomationSchema,
@@ -13,7 +14,8 @@ import {
 
 const router = Router();
 
-router.use(authenticate);
+// Studio is behind the 'studio' feature flag (admin-managed rollout/kill switch).
+router.use(authenticate, requireFeature('studio'));
 
 router.post('/', validate(createStudioAutomationSchema), studioAutomationController.create);
 router.get('/', validate(listStudioAutomationsSchema), studioAutomationController.list);

@@ -19,7 +19,20 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
     workspaceId: payload.workspaceId,
     role: payload.role,
     email: payload.email,
+    isImpersonation: payload.imp === true,
   };
+  next();
+}
+
+/**
+ * Refuse the request when the session is an admin impersonating a user.
+ * Applied to destructive self-service routes (password change, account
+ * deletion) so support sessions can look but not break.
+ */
+export function denyImpersonation(req: Request, _res: Response, next: NextFunction): void {
+  if (req.user?.isImpersonation) {
+    throw new ForbiddenError('This action is disabled during an impersonation session');
+  }
   next();
 }
 

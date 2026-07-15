@@ -1,10 +1,5 @@
 import { z } from 'zod';
-import {
-  Platform,
-  StudioAutomationStatus,
-  StudioKeywordMode,
-  StudioPostScope,
-} from '../constants';
+import { Platform, StudioAutomationStatus, StudioKeywordMode, StudioPostScope } from '../constants';
 import { objectIdSchema, paginationQuerySchema } from './common.validator';
 
 const keywordListSchema = z
@@ -19,7 +14,9 @@ const buttonSchema = z.object({
   url: z.string().trim().url('Button link must be a valid URL').max(500),
 });
 
-const repliesSchema = z.array(z.string().trim().min(1).max(2000)).max(5, 'Up to 5 reply variations');
+const repliesSchema = z
+  .array(z.string().trim().min(1).max(2000))
+  .max(5, 'Up to 5 reply variations');
 
 /** Cross-field rules shared by create and update payloads. */
 function assertStudioRules(

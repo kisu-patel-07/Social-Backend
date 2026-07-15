@@ -73,6 +73,34 @@ export function verifyEmailToken(
 }
 
 /**
+ * TOTP login challenge. Issued after a correct password when 2FA is enabled;
+ * the client exchanges it (plus a valid authenticator code) for real tokens.
+ */
+interface TotpChallengePayload extends BaseJwtPayload {
+  sub: string; // userId
+  type: 'totp_challenge';
+}
+
+export function signTotpChallengeToken(userId: string): string {
+  return jwt.sign({ sub: userId, type: 'totp_challenge' }, env.JWT_EMAIL_SECRET, {
+    expiresIn: '5m',
+  });
+}
+
+export function verifyTotpChallengeToken(token: string): { userId: string } {
+  let decoded: TotpChallengePayload;
+  try {
+    decoded = jwt.verify(token, env.JWT_EMAIL_SECRET) as TotpChallengePayload;
+  } catch {
+    throw new UnauthorizedError('Invalid or expired 2FA challenge — sign in again');
+  }
+  if (decoded.type !== 'totp_challenge') {
+    throw new UnauthorizedError('Invalid 2FA challenge');
+  }
+  return { userId: decoded.sub };
+}
+
+/**
  * OAuth `state` token. The Meta callback is a top-level browser redirect with
  * no Authorization header, so we carry the initiating user's identity in a
  * short-lived signed state value and verify it on the callback.

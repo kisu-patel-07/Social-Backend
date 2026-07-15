@@ -157,6 +157,14 @@ export enum ActivityAction {
   ADMIN_AUTOMATION_RESUMED = 'admin.automation_resumed',
   ADMIN_WEBHOOK_RETRIED = 'admin.webhook_retried',
   ADMIN_BROADCAST_SENT = 'admin.broadcast_sent',
+  ADMIN_IMPERSONATION_STARTED = 'admin.impersonation_started',
+  ADMIN_PAYMENT_REFUNDED = 'admin.payment_refunded',
+  ADMIN_FEATURE_UPDATED = 'admin.feature_updated',
+  ADMIN_DATA_EXPORTED = 'admin.data_exported',
+  ADMIN_2FA_ENABLED = 'admin.2fa_enabled',
+  ADMIN_2FA_DISABLED = 'admin.2fa_disabled',
+  ADMIN_NOTES_UPDATED = 'admin.notes_updated',
+  ADMIN_BANNER_UPDATED = 'admin.banner_updated',
 }
 
 export enum TokenType {

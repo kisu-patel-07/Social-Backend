@@ -11,6 +11,7 @@ export { leadRepository } from './lead.repository';
 export { analyticsRepository } from './analytics.repository';
 export { notificationRepository } from './notification.repository';
 export { activityLogRepository } from './activityLog.repository';
+export { featureFlagRepository } from './featureFlag.repository';
 export {
   planRepository,
   subscriptionRepository,

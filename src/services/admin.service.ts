@@ -6,28 +6,37 @@ import {
   MessageDirection,
   MessageStatus,
   NotificationType,
+  PaymentStatus,
   Platform,
   StudioAutomationStatus,
   SubscriptionStatus,
 } from '../constants';
 import { IActivityLog } from '../models/activityLog.model';
 import { IMessage } from '../models/message.model';
+import { IPayment } from '../models/payment.model';
 import { IPlan } from '../models/plan.model';
 import { ISocialAccount } from '../models/socialAccount.model';
 import { ISubscription } from '../models/subscription.model';
 import { IUser } from '../models/user.model';
 import { IWorkspace } from '../models/workspace.model';
 import { StudioAutomationModel } from '../models/studioAutomation.model';
+import { ISystemBanner, SystemSettingModel } from '../models/systemSetting.model';
 import { metaClient } from './meta';
 import { logger } from '../config/logger';
+import { signAccessToken } from '../utils/jwt';
+import { buildTotpUri, generateTotpSecret, totpQrDataUrl, verifyTotpCode } from '../utils/totp';
+import { CsvColumn, toCsv } from '../utils/csv';
+import { toDateKey } from '../utils/date';
 import {
   activityLogRepository,
   automationRepository,
   conversationRepository,
+  invoiceRepository,
   keywordRepository,
   leadRepository,
   messageRepository,
   notificationRepository,
+  paymentRepository,
   planRepository,
   socialAccountRepository,
   studioAutomationRepository,
@@ -89,6 +98,8 @@ export interface AdminUserDetail {
     messagesLast30Days: number;
   };
   recentActivity: IActivityLog[];
+  /** Internal support notes — never serialized on the user doc itself. */
+  adminNotes: string;
 }
 
 interface AdminSubscriptionFilters extends PaginationOptions {
@@ -168,6 +179,26 @@ interface BroadcastParams {
   audience: 'all' | 'verified';
   /** Restrict to workspaces on this plan (active/trialing). */
   planId?: string;
+}
+
+/** Deep-dive metrics for the admin analytics page. */
+export interface AdminAnalytics {
+  /** 90-day daily series. */
+  daily: Array<{ date: string; signups: number; messages: number; leads: number }>;
+  planDistribution: Array<{ planId: string; code: string; name: string; count: number }>;
+  topWorkspaces: Array<{ workspaceId: string; name: string; messages30d: number; leads: number }>;
+}
+
+/** A row in the admin workspaces directory. */
+export interface AdminWorkspaceRow {
+  _id: Types.ObjectId;
+  name: string;
+  createdAt: Date;
+  memberCount: number;
+  accountCount: number;
+  subscriptionStatus?: string;
+  plan?: { code?: string; name?: string };
+  owner?: { _id?: Types.ObjectId; name?: string; email?: string };
 }
 
 /** UTC day key (YYYY-MM-DD) used to bucket daily aggregates. */
@@ -336,7 +367,7 @@ class AdminService {
   }
 
   async getUserDetail(id: string): Promise<AdminUserDetail> {
-    const user = await userRepository.findById(id);
+    const user = await userRepository.findById(id, '+adminNotes');
     if (!user) throw new NotFoundError('User not found');
 
     const workspaceId = user.workspace;
@@ -379,6 +410,8 @@ class AdminService {
         messagesLast30Days,
       },
       recentActivity,
+      // toJSON strips adminNotes off `user`; surfaced separately, admin-only.
+      adminNotes: user.adminNotes ?? '',
     };
   }
 
@@ -890,6 +923,525 @@ class AdminService {
     });
 
     return { recipients: users.length };
+  }
+
+  // ---- Impersonation ------------------------------------------------------------
+
+  /**
+   * Issue a short-lived access token FOR the target user, marked imp:true.
+   * No refresh token is issued, so the session ends when the token expires;
+   * destructive self-service routes reject impersonated sessions.
+   */
+  async impersonate(actor: AuthUser, id: string): Promise<{ accessToken: string; user: IUser }> {
+    const user = await userRepository.findById(id);
+    if (!user) throw new NotFoundError('User not found');
+    if (user._id.toString() === actor.id) {
+      throw new BadRequestError('You are already yourself');
+    }
+    if (user.isSuperAdmin) {
+      throw new ForbiddenError('Super admin accounts cannot be impersonated');
+    }
+    if (user.isSuspended) {
+      throw new BadRequestError('Suspended users cannot be impersonated');
+    }
+
+    const accessToken = signAccessToken({
+      sub: user._id.toString(),
+      workspaceId: user.workspace.toString(),
+      role: user.role,
+      email: user.email,
+      imp: true,
+      actor: actor.id,
+    });
+
+    await activityService.log({
+      workspace: user.workspace.toString(),
+      user: actor.id,
+      action: ActivityAction.ADMIN_IMPERSONATION_STARTED,
+      description: `${actor.email} started impersonating ${user.email}`,
+      entityType: 'User',
+      entityId: user._id,
+    });
+
+    return { accessToken, user };
+  }
+
+  // ---- GDPR export ---------------------------------------------------------------
+
+  /**
+   * Bundle everything stored about a user's workspace into one JSON document.
+   * Secrets never leave: toJSON transforms strip password/OTP/TOTP/tokens.
+   * Messages are capped (newest first) to keep the export practical.
+   */
+  async exportUserData(actor: AuthUser, id: string): Promise<Record<string, unknown>> {
+    const user = await userRepository.findById(id);
+    if (!user) throw new NotFoundError('User not found');
+    const workspaceId = user.workspace;
+    const MESSAGE_CAP = 5000;
+
+    const [
+      workspace,
+      members,
+      socialAccounts,
+      automations,
+      studioAutomations,
+      leads,
+      conversations,
+      messages,
+      messageTotal,
+      notifications,
+      subscription,
+      invoices,
+      payments,
+      activity,
+    ] = await Promise.all([
+      workspaceRepository.findById(workspaceId),
+      userRepository.find({ workspace: workspaceId }),
+      socialAccountRepository.find({ workspace: workspaceId }),
+      automationRepository.find({ workspace: workspaceId }),
+      studioAutomationRepository.find({ workspace: workspaceId }),
+      leadRepository.find({ workspace: workspaceId }),
+      conversationRepository.find({ workspace: workspaceId }),
+      messageRepository.find({ workspace: workspaceId }, undefined, {
+        sort: { createdAt: -1 },
+        limit: MESSAGE_CAP,
+      }),
+      messageRepository.count({ workspace: workspaceId }),
+      notificationRepository.find({ user: user._id }),
+      subscriptionRepository.findOne({ workspace: workspaceId }, undefined, {
+        populate: { path: 'plan' },
+      }),
+      invoiceRepository.find({ workspace: workspaceId }),
+      paymentRepository.find({ workspace: workspaceId }),
+      activityLogRepository.find({ workspace: workspaceId }, undefined, {
+        sort: { createdAt: -1 },
+        limit: 1000,
+      }),
+    ]);
+
+    await activityService.log({
+      workspace: workspaceId.toString(),
+      user: actor.id,
+      action: ActivityAction.ADMIN_DATA_EXPORTED,
+      description: `${actor.email} exported all data for ${user.email} (GDPR)`,
+      entityType: 'User',
+      entityId: user._id,
+    });
+
+    return {
+      exportedAt: new Date().toISOString(),
+      exportedFor: user.email,
+      note:
+        messageTotal > MESSAGE_CAP
+          ? `messages truncated to the newest ${MESSAGE_CAP} of ${messageTotal}`
+          : undefined,
+      user,
+      workspace,
+      members,
+      socialAccounts,
+      automations,
+      studioAutomations,
+      leads,
+      conversations,
+      messages,
+      notifications,
+      subscription,
+      invoices,
+      payments,
+      activity,
+    };
+  }
+
+  // ---- Payments / refunds ---------------------------------------------------------
+
+  listPayments(
+    filters: PaginationOptions & { status?: PaymentStatus }
+  ): Promise<PaginatedResult<IPayment>> {
+    const query: FilterQuery<IPayment> = {};
+    if (filters.status) query.status = filters.status;
+    return paymentRepository.paginate(query, filters, undefined, [
+      { path: 'workspace', select: 'name' },
+      { path: 'invoice', select: 'number status' },
+    ]);
+  }
+
+  /**
+   * Bookkeeping refund: marks the payment refunded and comps nothing else.
+   * When a real gateway lands, its refund API call slots in right here.
+   */
+  async refundPayment(actor: AuthUser, id: string): Promise<IPayment> {
+    const payment = await paymentRepository.findById(id);
+    if (!payment) throw new NotFoundError('Payment not found');
+    if (payment.status !== PaymentStatus.SUCCEEDED) {
+      throw new BadRequestError('Only succeeded payments can be refunded');
+    }
+
+    const updated = await paymentRepository.updateById(payment._id, {
+      $set: {
+        status: PaymentStatus.REFUNDED,
+        refundedAt: new Date(),
+        refundedBy: new Types.ObjectId(actor.id),
+      },
+    });
+    if (!updated) throw new NotFoundError('Payment not found');
+    await updated.populate([
+      { path: 'workspace', select: 'name' },
+      { path: 'invoice', select: 'number status' },
+    ]);
+
+    await activityService.log({
+      workspace: payment.workspace.toString(),
+      user: actor.id,
+      action: ActivityAction.ADMIN_PAYMENT_REFUNDED,
+      description: `${actor.email} marked a ${(payment.amount / 100).toFixed(2)} ${payment.currency} payment as refunded`,
+      entityType: 'Payment',
+      entityId: payment._id,
+    });
+    return updated;
+  }
+
+  // ---- Workspace search (feature-flag allowlist picker) -----------------------------
+
+  async searchWorkspaces(search?: string): Promise<Array<{ _id: Types.ObjectId; name: string }>> {
+    const query: FilterQuery<IWorkspace> = search
+      ? { name: { $regex: search, $options: 'i' } }
+      : {};
+    const workspaces = await workspaceRepository.find(query, 'name', {
+      sort: { name: 1 },
+      limit: 10,
+    });
+    return workspaces.map((w) => ({ _id: w._id, name: w.name }));
+  }
+
+  // ---- Admin 2FA (TOTP) --------------------------------------------------------------
+
+  /** Generate + store a pending TOTP secret; returns the QR for enrollment. */
+  async totpSetup(
+    actor: AuthUser
+  ): Promise<{ secret: string; otpauthUrl: string; qrDataUrl: string }> {
+    const user = await userRepository.findById(actor.id);
+    if (!user) throw new NotFoundError('User not found');
+    if (user.isTotpEnabled) {
+      throw new ConflictError('2FA is already enabled — disable it first to re-enroll');
+    }
+
+    const secret = generateTotpSecret();
+    await userRepository.updateById(user._id, { $set: { totpSecret: secret } });
+    const otpauthUrl = buildTotpUri(user.email, secret);
+    const qrDataUrl = await totpQrDataUrl(otpauthUrl);
+    return { secret, otpauthUrl, qrDataUrl };
+  }
+
+  /** Confirm the enrollment code and switch 2FA on for the acting admin. */
+  async totpEnable(actor: AuthUser, code: string): Promise<void> {
+    const user = await userRepository.findById(actor.id, '+totpSecret');
+    if (!user?.totpSecret) {
+      throw new BadRequestError('Run 2FA setup first');
+    }
+    if (!verifyTotpCode(code, user.totpSecret)) {
+      throw new BadRequestError('Incorrect code — check your authenticator app');
+    }
+
+    await userRepository.updateById(user._id, { $set: { isTotpEnabled: true } });
+    await activityService.log({
+      workspace: actor.workspaceId,
+      user: actor.id,
+      action: ActivityAction.ADMIN_2FA_ENABLED,
+      description: `${actor.email} enabled two-factor authentication`,
+    });
+  }
+
+  /** Turn 2FA off. Requires a valid current code so a hijacked session can't drop it. */
+  async totpDisable(actor: AuthUser, code: string): Promise<void> {
+    const user = await userRepository.findById(actor.id, '+totpSecret');
+    if (!user?.isTotpEnabled || !user.totpSecret) {
+      throw new BadRequestError('2FA is not enabled');
+    }
+    if (!verifyTotpCode(code, user.totpSecret)) {
+      throw new BadRequestError('Incorrect code — check your authenticator app');
+    }
+
+    await userRepository.updateById(user._id, {
+      $set: { isTotpEnabled: false },
+      $unset: { totpSecret: '' },
+    });
+    await activityService.log({
+      workspace: actor.workspaceId,
+      user: actor.id,
+      action: ActivityAction.ADMIN_2FA_DISABLED,
+      description: `${actor.email} disabled two-factor authentication`,
+    });
+  }
+
+  // ---- Deep analytics ----------------------------------------------------------
+
+  async getAnalytics(): Promise<AdminAnalytics> {
+    const now = new Date();
+    const days90 = new Date(now.getTime() - 90 * DAY_MS);
+    const days30 = new Date(now.getTime() - 30 * DAY_MS);
+    const byDay = { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } };
+
+    const [signupsDaily, messagesDaily, leadsDaily, planDist, topByMessages] = await Promise.all([
+      userRepository.aggregate<{ _id: string; count: number }>([
+        { $match: { createdAt: { $gte: days90 } } },
+        { $group: { _id: byDay, count: { $sum: 1 } } },
+      ]),
+      messageRepository.aggregate<{ _id: string; count: number }>([
+        { $match: { createdAt: { $gte: days90 } } },
+        { $group: { _id: byDay, count: { $sum: 1 } } },
+      ]),
+      leadRepository.aggregate<{ _id: string; count: number }>([
+        { $match: { createdAt: { $gte: days90 } } },
+        { $group: { _id: byDay, count: { $sum: 1 } } },
+      ]),
+      subscriptionRepository.aggregate<{
+        _id: Types.ObjectId;
+        count: number;
+        plan: { code?: string; name?: string };
+      }>([
+        {
+          $match: { status: { $in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING] } },
+        },
+        { $group: { _id: '$plan', count: { $sum: 1 } } },
+        { $lookup: { from: 'plans', localField: '_id', foreignField: '_id', as: 'planDoc' } },
+        {
+          $project: {
+            count: 1,
+            plan: {
+              $let: {
+                vars: { p: { $arrayElemAt: ['$planDoc', 0] } },
+                in: { code: '$$p.code', name: '$$p.name' },
+              },
+            },
+          },
+        },
+        { $sort: { count: -1 } },
+      ]),
+      messageRepository.aggregate<{
+        _id: Types.ObjectId;
+        messages30d: number;
+        workspace: { name?: string };
+      }>([
+        { $match: { createdAt: { $gte: days30 } } },
+        { $group: { _id: '$workspace', messages30d: { $sum: 1 } } },
+        { $sort: { messages30d: -1 } },
+        { $limit: 10 },
+        {
+          $lookup: { from: 'workspaces', localField: '_id', foreignField: '_id', as: 'wsDoc' },
+        },
+        {
+          $project: {
+            messages30d: 1,
+            workspace: {
+              $let: {
+                vars: { w: { $arrayElemAt: ['$wsDoc', 0] } },
+                in: { name: '$$w.name' },
+              },
+            },
+          },
+        },
+      ]),
+    ]);
+
+    const signupsMap = new Map(signupsDaily.map((d) => [d._id, d.count]));
+    const messagesMap = new Map(messagesDaily.map((d) => [d._id, d.count]));
+    const leadsMap = new Map(leadsDaily.map((d) => [d._id, d.count]));
+    const daily: AdminAnalytics['daily'] = [];
+    for (let i = 89; i >= 0; i--) {
+      const key = dayKey(new Date(now.getTime() - i * DAY_MS));
+      daily.push({
+        date: key,
+        signups: signupsMap.get(key) ?? 0,
+        messages: messagesMap.get(key) ?? 0,
+        leads: leadsMap.get(key) ?? 0,
+      });
+    }
+
+    // Lead totals for the top workspaces (one query for all ten).
+    const topIds = topByMessages.map((t) => t._id);
+    const leadCounts = await leadRepository.aggregate<{ _id: Types.ObjectId; count: number }>([
+      { $match: { workspace: { $in: topIds } } },
+      { $group: { _id: '$workspace', count: { $sum: 1 } } },
+    ]);
+    const leadCountMap = new Map(leadCounts.map((l) => [l._id.toString(), l.count]));
+
+    return {
+      daily,
+      planDistribution: planDist.map((p) => ({
+        planId: p._id?.toString() ?? 'none',
+        code: p.plan?.code ?? 'unknown',
+        name: p.plan?.name ?? 'Unknown plan',
+        count: p.count,
+      })),
+      topWorkspaces: topByMessages.map((t) => ({
+        workspaceId: t._id.toString(),
+        name: t.workspace?.name ?? 'Unknown workspace',
+        messages30d: t.messages30d,
+        leads: leadCountMap.get(t._id.toString()) ?? 0,
+      })),
+    };
+  }
+
+  // ---- Workspaces directory -------------------------------------------------------
+
+  async listWorkspaces(
+    filters: PaginationOptions & { search?: string }
+  ): Promise<{ items: AdminWorkspaceRow[]; meta: ReturnType<typeof buildPaginationMeta> }> {
+    const pipeline: PipelineStage[] = [
+      ...(filters.search ? [{ $match: { name: { $regex: filters.search, $options: 'i' } } }] : []),
+      { $sort: { ...filters.sort, _id: 1 as const } },
+      {
+        $facet: {
+          items: [
+            { $skip: filters.skip },
+            { $limit: filters.limit },
+            {
+              $lookup: {
+                from: 'users',
+                localField: '_id',
+                foreignField: 'workspace',
+                as: 'members',
+              },
+            },
+            {
+              $lookup: {
+                from: 'socialaccounts',
+                localField: '_id',
+                foreignField: 'workspace',
+                as: 'accounts',
+              },
+            },
+            {
+              $lookup: {
+                from: 'subscriptions',
+                localField: '_id',
+                foreignField: 'workspace',
+                as: 'subs',
+              },
+            },
+            { $addFields: { sub: { $arrayElemAt: ['$subs', 0] } } },
+            {
+              $lookup: {
+                from: 'plans',
+                localField: 'sub.plan',
+                foreignField: '_id',
+                as: 'planDoc',
+              },
+            },
+            {
+              $lookup: { from: 'users', localField: 'owner', foreignField: '_id', as: 'ownerDoc' },
+            },
+            {
+              $project: {
+                name: 1,
+                createdAt: 1,
+                memberCount: { $size: '$members' },
+                accountCount: {
+                  $size: {
+                    $filter: { input: '$accounts', as: 'a', cond: '$$a.isActive' },
+                  },
+                },
+                subscriptionStatus: '$sub.status',
+                plan: {
+                  $let: {
+                    vars: { p: { $arrayElemAt: ['$planDoc', 0] } },
+                    in: { code: '$$p.code', name: '$$p.name' },
+                  },
+                },
+                owner: {
+                  $let: {
+                    vars: { o: { $arrayElemAt: ['$ownerDoc', 0] } },
+                    in: { _id: '$$o._id', name: '$$o.name', email: '$$o.email' },
+                  },
+                },
+              },
+            },
+          ],
+          total: [{ $count: 'count' }],
+        },
+      },
+    ];
+
+    const [result] = await workspaceRepository.aggregate<{
+      items: AdminWorkspaceRow[];
+      total: Array<{ count: number }>;
+    }>(pipeline);
+    const total = result?.total[0]?.count ?? 0;
+    return { items: result?.items ?? [], meta: buildPaginationMeta(total, filters) };
+  }
+
+  // ---- Admin notes -------------------------------------------------------------------
+
+  async getUserNotes(id: string): Promise<string> {
+    const user = await userRepository.findById(id, '+adminNotes');
+    if (!user) throw new NotFoundError('User not found');
+    return user.adminNotes ?? '';
+  }
+
+  async setUserNotes(actor: AuthUser, id: string, notes: string): Promise<void> {
+    const user = await userRepository.findById(id);
+    if (!user) throw new NotFoundError('User not found');
+    await userRepository.updateById(user._id, {
+      $set: { adminNotes: notes.trim().slice(0, 5000) },
+    });
+    await activityService.log({
+      workspace: user.workspace.toString(),
+      user: actor.id,
+      action: ActivityAction.ADMIN_NOTES_UPDATED,
+      description: `${actor.email} updated internal notes for ${user.email}`,
+      entityType: 'User',
+      entityId: user._id,
+    });
+  }
+
+  // ---- Users CSV export ----------------------------------------------------------------
+
+  async exportUsersCsv(): Promise<string> {
+    const users = await userRepository.find({}, undefined, {
+      sort: { createdAt: -1 },
+      limit: 20000,
+      populate: { path: 'workspace', select: 'name' },
+    });
+
+    const columns: CsvColumn<IUser>[] = [
+      { header: 'Name', value: (u) => u.name },
+      { header: 'Email', value: (u) => u.email },
+      {
+        header: 'Workspace',
+        value: (u) => (u.workspace as unknown as { name?: string })?.name ?? '',
+      },
+      { header: 'Verified', value: (u) => (u.isEmailVerified ? 'yes' : 'no') },
+      { header: 'Suspended', value: (u) => (u.isSuspended ? 'yes' : 'no') },
+      { header: 'Super Admin', value: (u) => (u.isSuperAdmin ? 'yes' : 'no') },
+      { header: 'Last Login', value: (u) => (u.lastLoginAt ? toDateKey(u.lastLoginAt) : '') },
+      { header: 'Signed Up', value: (u) => toDateKey(u.createdAt) },
+    ];
+    return toCsv(users, columns);
+  }
+
+  // ---- Maintenance banner -----------------------------------------------------------------
+
+  async getBanner(): Promise<ISystemBanner> {
+    const setting = await SystemSettingModel.findOne({ key: 'global' }).exec();
+    return setting?.banner ?? { enabled: false, message: '', level: 'info' };
+  }
+
+  async setBanner(actor: AuthUser, banner: ISystemBanner): Promise<ISystemBanner> {
+    const updated = await SystemSettingModel.findOneAndUpdate(
+      { key: 'global' },
+      { $set: { banner } },
+      { new: true, upsert: true }
+    ).exec();
+
+    await activityService.log({
+      workspace: actor.workspaceId,
+      user: actor.id,
+      action: ActivityAction.ADMIN_BANNER_UPDATED,
+      description: banner.enabled
+        ? `${actor.email} enabled the ${banner.level} banner: "${banner.message.slice(0, 80)}"`
+        : `${actor.email} disabled the site banner`,
+    });
+    return updated.banner;
   }
 
   // ---- Activity --------------------------------------------------------------

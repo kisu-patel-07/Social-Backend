@@ -23,6 +23,7 @@ import {
 import { activityService } from './activity.service';
 import { analyticsService } from './analytics.service';
 import { emailService } from './email/email.service';
+import { featureService } from './feature.service';
 import { IncomingComment, metaClient } from './meta';
 import { notificationService } from './notification.service';
 
@@ -86,6 +87,10 @@ class StudioEngineService {
    * The inbound comment itself was already recorded by the caller.
    */
   async handleComment(account: ISocialAccount, comment: IncomingComment): Promise<boolean> {
+    // Honor the admin kill switch / rollout even for already-active automations.
+    const studioEnabled = await featureService.isEnabled('studio', account.workspace.toString());
+    if (!studioEnabled) return false;
+
     const candidates = await studioAutomationRepository.findActiveMatching(
       account._id.toString(),
       comment.postId
@@ -137,7 +142,15 @@ class StudioEngineService {
       await this.sendPublicReply(account, automation, comment);
     }
     const dmSent = await this.sendPrivateMessage(account, automation, comment, conversation._id);
-    await this.registerTriggerOutcome(account, automation, comment, keyword, now, conversation, dmSent);
+    await this.registerTriggerOutcome(
+      account,
+      automation,
+      comment,
+      keyword,
+      now,
+      conversation,
+      dmSent
+    );
     return true;
   }
 

@@ -5,13 +5,20 @@ import { authenticate, requireSuperAdmin } from '../middlewares';
 import { validate } from '../middlewares/validate.middleware';
 import {
   adminAutomationStatusSchema,
+  adminBannerSchema,
   adminBroadcastSchema,
   adminCreatePlanSchema,
   adminListActivitySchema,
   adminListAutomationsSchema,
+  adminListPaymentsSchema,
   adminListSubscriptionsSchema,
   adminListUsersSchema,
+  adminListWorkspacesSchema,
+  adminSearchWorkspacesSchema,
   adminSuspendUserSchema,
+  adminTotpCodeSchema,
+  adminUserNotesSchema,
+  adminUpdateFeatureSchema,
   adminUpdatePlanSchema,
   adminUpdateSubscriptionSchema,
 } from '../validators/admin.validator';
@@ -31,6 +38,16 @@ router.get('/overview', adminController.overview);
 // User management
 router.get('/users', validate(adminListUsersSchema), adminController.listUsers);
 router.get('/users/:id', validate(z.object({ params: idParamSchema })), adminController.getUser);
+router.post(
+  '/users/:id/impersonate',
+  validate(z.object({ params: idParamSchema })),
+  adminController.impersonate
+);
+router.get(
+  '/users/:id/export',
+  validate(z.object({ params: idParamSchema })),
+  adminController.exportUser
+);
 router.patch('/users/:id/suspend', validate(adminSuspendUserSchema), adminController.suspendUser);
 router.patch(
   '/users/:id/verify-email',
@@ -78,6 +95,44 @@ router.post(
 
 // Broadcast announcements
 router.post('/broadcast', validate(adminBroadcastSchema), adminController.broadcast);
+
+// Payments (bookkeeping refunds until a gateway is integrated)
+router.get('/payments', validate(adminListPaymentsSchema), adminController.listPayments);
+router.patch(
+  '/payments/:id/refund',
+  validate(z.object({ params: idParamSchema })),
+  adminController.refundPayment
+);
+
+// Feature flags + workspace search for the allowlist picker
+router.get('/features', adminController.listFeatures);
+router.patch('/features/:key', validate(adminUpdateFeatureSchema), adminController.updateFeature);
+router.get('/workspaces', validate(adminSearchWorkspacesSchema), adminController.searchWorkspaces);
+
+// Admin 2FA (TOTP) for the acting super admin
+router.post('/2fa/setup', adminController.totpSetup);
+router.post('/2fa/enable', validate(adminTotpCodeSchema), adminController.totpEnable);
+router.post('/2fa/disable', validate(adminTotpCodeSchema), adminController.totpDisable);
+
+// Deep analytics
+router.get('/analytics', adminController.analytics);
+
+// Workspaces directory (paginated; /workspaces above is the max-10 picker)
+router.get(
+  '/workspaces-directory',
+  validate(adminListWorkspacesSchema),
+  adminController.listWorkspacesDirectory
+);
+
+// Internal notes on a user
+router.patch('/users/:id/notes', validate(adminUserNotesSchema), adminController.setUserNotes);
+
+// Users CSV export
+router.get('/users-export', adminController.exportUsersCsv);
+
+// Maintenance banner
+router.get('/banner', adminController.getBanner);
+router.put('/banner', validate(adminBannerSchema), adminController.setBanner);
 
 // Platform-wide activity feed
 router.get('/activity', validate(adminListActivitySchema), adminController.listActivity);

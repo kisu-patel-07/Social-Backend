@@ -3,7 +3,13 @@ import crypto from 'crypto';
 import { env } from '../../config/env';
 import { logger } from '../../config/logger';
 import { ExternalServiceError } from '../../utils/AppError';
-import { InstagramMediaPage, MediaProductType, MediaType, MetaPage, MetaTokenResponse } from './meta.types';
+import {
+  InstagramMediaPage,
+  MediaProductType,
+  MediaType,
+  MetaPage,
+  MetaTokenResponse,
+} from './meta.types';
 
 /**
  * Low-level client for the Meta Graph API (Facebook + Instagram).
@@ -48,7 +54,9 @@ class MetaClient {
     )?.error;
     const summary = metaError?.message
       ? `Meta error: ${metaError.message}` +
-        (metaError.code ? ` [code ${metaError.code}${metaError.error_subcode ? `.${metaError.error_subcode}` : ''}]` : '')
+        (metaError.code
+          ? ` [code ${metaError.code}${metaError.error_subcode ? `.${metaError.error_subcode}` : ''}]`
+          : '')
       : `Meta API request failed: ${context}`;
     throw new ExternalServiceError(summary, detail);
   }

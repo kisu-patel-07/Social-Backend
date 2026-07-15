@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { settingsController } from '../controllers/settings.controller';
-import { authenticate } from '../middlewares';
+import { authenticate, denyImpersonation } from '../middlewares';
 import { validate } from '../middlewares/validate.middleware';
 import {
   changePasswordSchema,
@@ -25,7 +25,18 @@ router.put(
   validate(notificationPrefsSchema),
   settingsController.updateNotificationPrefs
 );
-router.put('/password', validate(changePasswordSchema), settingsController.changePassword);
-router.delete('/account', validate(deleteAccountSchema), settingsController.deleteAccount);
+// Destructive self-service actions are disabled during admin impersonation.
+router.put(
+  '/password',
+  denyImpersonation,
+  validate(changePasswordSchema),
+  settingsController.changePassword
+);
+router.delete(
+  '/account',
+  denyImpersonation,
+  validate(deleteAccountSchema),
+  settingsController.deleteAccount
+);
 
 export default router;

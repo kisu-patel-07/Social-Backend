@@ -1,10 +1,5 @@
 import { Schema, model, Document, Types } from 'mongoose';
-import {
-  Platform,
-  StudioAutomationStatus,
-  StudioKeywordMode,
-  StudioPostScope,
-} from '../constants';
+import { Platform, StudioAutomationStatus, StudioKeywordMode, StudioPostScope } from '../constants';
 
 /** A call-to-action link button attached to the automated DM. */
 export interface IStudioButton {

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { REFRESH_TOKEN_COOKIE } from '../constants';
 import { HttpStatus } from '../constants/httpStatus';
 import { authService } from '../services';
+import { isTotpChallenge } from '../services/auth.service';
 import { UnauthorizedError } from '../utils/AppError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendCreated, sendSuccess } from '../utils/apiResponse';
@@ -18,7 +19,26 @@ export const authController = {
   }),
 
   login: asyncHandler(async (req: Request, res: Response) => {
-    const { user, tokens } = await authService.login(req.body.email, req.body.password, req.ip);
+    const result = await authService.login(req.body.email, req.body.password, req.ip);
+    if (isTotpChallenge(result)) {
+      // Password was correct but 2FA is on — no session yet.
+      sendSuccess(
+        res,
+        { requiresTotp: true, challengeToken: result.challengeToken },
+        'Enter your authentication code'
+      );
+      return;
+    }
+    setRefreshCookie(res, result.tokens.refreshToken);
+    sendSuccess(res, { user: result.user, accessToken: result.tokens.accessToken }, 'Logged in');
+  }),
+
+  totpVerify: asyncHandler(async (req: Request, res: Response) => {
+    const { user, tokens } = await authService.completeTotpLogin(
+      req.body.challengeToken,
+      req.body.code,
+      req.ip
+    );
     setRefreshCookie(res, tokens.refreshToken);
     sendSuccess(res, { user, accessToken: tokens.accessToken }, 'Logged in');
   }),

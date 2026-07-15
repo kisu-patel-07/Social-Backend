@@ -70,12 +70,10 @@ class InboxService {
         { fromUsername: { $regex: filters.search, $options: 'i' } },
       ];
     }
-    return messageRepository.paginate(
-      query,
-      { ...filters, sort: { createdAt: -1 } },
-      undefined,
-      { path: 'socialAccount', select: 'name platform username' }
-    );
+    return messageRepository.paginate(query, { ...filters, sort: { createdAt: -1 } }, undefined, {
+      path: 'socialAccount',
+      select: 'name platform username',
+    });
   }
 
   async getConversation(workspaceId: string, id: string): Promise<IConversation> {
@@ -224,11 +222,7 @@ class InboxService {
     });
 
     try {
-      const result = await metaClient.replyToComment(
-        comment.externalId,
-        text,
-        account.accessToken
-      );
+      const result = await metaClient.replyToComment(comment.externalId, text, account.accessToken);
       await messageRepository.updateById(message._id, {
         status: MessageStatus.SENT,
         externalId: result.id,

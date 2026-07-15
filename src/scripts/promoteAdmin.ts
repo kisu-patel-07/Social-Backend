@@ -33,7 +33,9 @@ async function run(): Promise<void> {
   }
   logger.info(
     `✅ ${user.email} is ${revoke ? 'no longer' : 'now'} a super admin${
-      !revoke && !user.isEmailVerified ? ' (note: email not verified — verify before logging in)' : ''
+      !revoke && !user.isEmailVerified
+        ? ' (note: email not verified — verify before logging in)'
+        : ''
     }`
   );
 }

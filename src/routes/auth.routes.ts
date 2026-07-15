@@ -10,6 +10,7 @@ import {
   registerSchema,
   resendVerificationSchema,
   resetPasswordSchema,
+  totpVerifySchema,
   verifyEmailSchema,
   verifyOtpSchema,
 } from '../validators/auth.validator';
@@ -18,6 +19,7 @@ const router = Router();
 
 router.post('/register', authLimiter, validate(registerSchema), authController.register);
 router.post('/login', authLimiter, validate(loginSchema), authController.login);
+router.post('/totp-verify', authLimiter, validate(totpVerifySchema), authController.totpVerify);
 router.post('/refresh', validate(refreshSchema), authController.refresh);
 router.post('/logout', authController.logout);
 router.post('/verify-email', validate(verifyEmailSchema), authController.verifyEmail);

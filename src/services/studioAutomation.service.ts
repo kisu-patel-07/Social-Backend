@@ -32,7 +32,9 @@ interface StudioAutomationParams {
   status?: StudioAutomationStatus;
 }
 
-type UpdateStudioAutomationParams = Partial<Omit<StudioAutomationParams, 'socialAccountId' | 'platform' | 'templateKey'>>;
+type UpdateStudioAutomationParams = Partial<
+  Omit<StudioAutomationParams, 'socialAccountId' | 'platform' | 'templateKey'>
+>;
 
 interface ListFilters extends PaginationOptions {
   platform?: Platform;
@@ -68,9 +70,7 @@ class StudioAutomationService {
       throw new BadRequestError('Pick at least one post (or target all posts) before going live');
     }
     if (doc.publicReplyEnabled && !doc.publicReplies.length) {
-      throw new BadRequestError(
-        'Add a public reply (or disable public replies) before going live'
-      );
+      throw new BadRequestError('Add a public reply (or disable public replies) before going live');
     }
   }
 
@@ -163,9 +163,7 @@ class StudioAutomationService {
       postScope: params.postScope ?? existing.postScope,
       postIds: params.postIds ?? existing.postIds,
       keywordMode: params.keywordMode ?? existing.keywordMode,
-      keywords: params.keywords
-        ? this.normalizeKeywords(params.keywords)
-        : existing.keywords,
+      keywords: params.keywords ? this.normalizeKeywords(params.keywords) : existing.keywords,
       excludeKeywords: params.excludeKeywords
         ? this.normalizeKeywords(params.excludeKeywords)
         : existing.excludeKeywords,

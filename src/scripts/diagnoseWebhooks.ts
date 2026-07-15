@@ -55,7 +55,8 @@ async function checkAppSubscriptions(): Promise<void> {
             '`feed` is NOT subscribed at app level → comment webhooks will never be sent. ' +
               'App Dashboard → Webhooks → Page → subscribe to `feed`.'
           );
-        if (fields.includes('messages')) ok('`messages` is subscribed at app level (why DMs work).');
+        if (fields.includes('messages'))
+          ok('`messages` is subscribed at app level (why DMs work).');
       }
     }
     if (!subs.some((s) => s.object === 'page')) {
@@ -128,9 +129,9 @@ async function checkPageSubscribedApps(name: string, pageId: string, token: stri
 function extractError(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const metaError = error.response?.data?.error as
-      | { message?: string; code?: number; error_subcode?: number }
-      | undefined;
-    if (metaError) return `${metaError.message} (code ${metaError.code}/${metaError.error_subcode})`;
+      { message?: string; code?: number; error_subcode?: number } | undefined;
+    if (metaError)
+      return `${metaError.message} (code ${metaError.code}/${metaError.error_subcode})`;
     return error.message;
   }
   return (error as Error).message;

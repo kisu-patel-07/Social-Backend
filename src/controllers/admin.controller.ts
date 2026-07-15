@@ -1,9 +1,11 @@
 import { Request, Response } from 'express';
-import { SubscriptionStatus } from '../constants';
+import { PaymentStatus, SubscriptionStatus } from '../constants';
 import { adminService } from '../services/admin.service';
+import { featureService } from '../services/feature.service';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendCreated, sendNoContent, sendPaginated, sendSuccess } from '../utils/apiResponse';
 import { buildPaginationOptions } from '../utils/pagination';
+import { toDateKey } from '../utils/date';
 
 export const adminController = {
   // ---- Overview -------------------------------------------------------------
@@ -116,6 +118,114 @@ export const adminController = {
   broadcast: asyncHandler(async (req: Request, res: Response) => {
     const result = await adminService.broadcast(req.user!, req.body);
     sendSuccess(res, result, `Announcement sent to ${result.recipients} user(s)`);
+  }),
+
+  // ---- Impersonation ------------------------------------------------------------
+  impersonate: asyncHandler(async (req: Request, res: Response) => {
+    const result = await adminService.impersonate(req.user!, req.params.id);
+    sendSuccess(res, result, `Impersonation session started for ${result.user.email}`);
+  }),
+
+  // ---- GDPR export ---------------------------------------------------------------
+  exportUser: asyncHandler(async (req: Request, res: Response) => {
+    const data = await adminService.exportUserData(req.user!, req.params.id);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="user-export-${req.params.id}-${toDateKey(new Date())}.json"`
+    );
+    res.status(200).send(JSON.stringify(data, null, 2));
+  }),
+
+  // ---- Payments -------------------------------------------------------------------
+  listPayments: asyncHandler(async (req: Request, res: Response) => {
+    const options = buildPaginationOptions(req.query);
+    const result = await adminService.listPayments({
+      ...options,
+      status: req.query.status as PaymentStatus | undefined,
+    });
+    sendPaginated(res, result.items, result.meta);
+  }),
+
+  refundPayment: asyncHandler(async (req: Request, res: Response) => {
+    const payment = await adminService.refundPayment(req.user!, req.params.id);
+    sendSuccess(res, payment, 'Payment marked as refunded');
+  }),
+
+  // ---- Feature flags ----------------------------------------------------------------
+  listFeatures: asyncHandler(async (_req: Request, res: Response) => {
+    const flags = await featureService.listFlags();
+    sendSuccess(res, flags);
+  }),
+
+  updateFeature: asyncHandler(async (req: Request, res: Response) => {
+    const flag = await featureService.updateFlag(req.params.key, req.body);
+    sendSuccess(res, flag, 'Feature flag updated');
+  }),
+
+  searchWorkspaces: asyncHandler(async (req: Request, res: Response) => {
+    const workspaces = await adminService.searchWorkspaces(req.query.search as string | undefined);
+    sendSuccess(res, workspaces);
+  }),
+
+  // ---- Admin 2FA ---------------------------------------------------------------------
+  totpSetup: asyncHandler(async (req: Request, res: Response) => {
+    const setup = await adminService.totpSetup(req.user!);
+    sendSuccess(res, setup, 'Scan the QR code with your authenticator app');
+  }),
+
+  totpEnable: asyncHandler(async (req: Request, res: Response) => {
+    await adminService.totpEnable(req.user!, req.body.code);
+    sendSuccess(res, { enabled: true }, 'Two-factor authentication enabled');
+  }),
+
+  totpDisable: asyncHandler(async (req: Request, res: Response) => {
+    await adminService.totpDisable(req.user!, req.body.code);
+    sendSuccess(res, { enabled: false }, 'Two-factor authentication disabled');
+  }),
+
+  // ---- Deep analytics ----------------------------------------------------------
+  analytics: asyncHandler(async (_req: Request, res: Response) => {
+    const analytics = await adminService.getAnalytics();
+    sendSuccess(res, analytics);
+  }),
+
+  // ---- Workspaces directory -------------------------------------------------------
+  listWorkspacesDirectory: asyncHandler(async (req: Request, res: Response) => {
+    const options = buildPaginationOptions(req.query);
+    const result = await adminService.listWorkspaces({
+      ...options,
+      search: req.query.search as string | undefined,
+    });
+    sendPaginated(res, result.items, result.meta);
+  }),
+
+  // ---- Admin notes -------------------------------------------------------------------
+  setUserNotes: asyncHandler(async (req: Request, res: Response) => {
+    await adminService.setUserNotes(req.user!, req.params.id, req.body.notes);
+    sendSuccess(res, { notes: req.body.notes }, 'Notes saved');
+  }),
+
+  // ---- Users CSV export ----------------------------------------------------------------
+  exportUsersCsv: asyncHandler(async (_req: Request, res: Response) => {
+    const csv = await adminService.exportUsersCsv();
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="users-${toDateKey(new Date())}.csv"`
+    );
+    res.status(200).send(csv);
+  }),
+
+  // ---- Maintenance banner -----------------------------------------------------------------
+  getBanner: asyncHandler(async (_req: Request, res: Response) => {
+    const banner = await adminService.getBanner();
+    sendSuccess(res, banner);
+  }),
+
+  setBanner: asyncHandler(async (req: Request, res: Response) => {
+    const banner = await adminService.setBanner(req.user!, req.body);
+    sendSuccess(res, banner, banner.enabled ? 'Banner is live' : 'Banner disabled');
   }),
 
   // ---- Activity --------------------------------------------------------------

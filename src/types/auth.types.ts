@@ -6,6 +6,10 @@ export interface JwtPayload {
   workspaceId: string;
   role: UserRole;
   email: string;
+  /** Present (true) on impersonation tokens issued from the admin panel. */
+  imp?: boolean;
+  /** The impersonating admin's user id (audit trail). */
+  actor?: string;
 }
 
 /** The authenticated principal attached to req.user after auth middleware. */
@@ -14,6 +18,8 @@ export interface AuthUser {
   workspaceId: string;
   role: UserRole;
   email: string;
+  /** True when this session is an admin impersonating the user. */
+  isImpersonation?: boolean;
 }
 
 /** Tokens returned to the client after successful authentication. */

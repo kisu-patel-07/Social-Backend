@@ -46,6 +46,16 @@ export const verifyOtpSchema = z.object({
   }),
 });
 
+export const totpVerifySchema = z.object({
+  body: z.object({
+    challengeToken: z.string().min(1),
+    code: z
+      .string()
+      .trim()
+      .regex(/^\d{6}$/, 'Code must be 6 digits'),
+  }),
+});
+
 export const resendVerificationSchema = z.object({
   body: z.object({
     email: z.string().trim().toLowerCase().email(),

@@ -18,6 +18,9 @@ export interface IPayment extends Document {
   method?: string;
   failureReason?: string;
   paidAt?: Date;
+  /** Set when an admin marks the payment refunded (bookkeeping until a gateway exists). */
+  refundedAt?: Date;
+  refundedBy?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -39,6 +42,8 @@ const paymentSchema = new Schema<IPayment>(
     method: { type: String },
     failureReason: { type: String },
     paidAt: { type: Date },
+    refundedAt: { type: Date },
+    refundedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true }
 );

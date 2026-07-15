@@ -28,11 +28,14 @@ import {
   signAccessToken,
   signEmailToken,
   signRefreshToken,
+  signTotpChallengeToken,
   verifyEmailToken,
   verifyRefreshToken,
+  verifyTotpChallengeToken,
 } from '../utils/jwt';
 import { generateOtp, hashOtp, verifyOtp } from '../utils/otp';
 import { comparePassword, hashPassword } from '../utils/password';
+import { verifyTotpCode } from '../utils/totp';
 import { activityService } from './activity.service';
 import { emailService } from './email/email.service';
 
@@ -46,6 +49,16 @@ interface RegisterParams {
 interface AuthResult {
   user: IUser;
   tokens: AuthTokens;
+}
+
+/** Returned instead of tokens when the account has TOTP 2FA enabled. */
+export interface TotpChallenge {
+  requiresTotp: true;
+  challengeToken: string;
+}
+
+export function isTotpChallenge(result: AuthResult | TotpChallenge): result is TotpChallenge {
+  return (result as TotpChallenge).requiresTotp === true;
 }
 
 /** How long an email-verification OTP stays valid. */
@@ -150,7 +163,10 @@ class AuthService {
     }
   }
 
-  async register(params: RegisterParams, ip?: string): Promise<{ user: IUser; emailSent: boolean }> {
+  async register(
+    params: RegisterParams,
+    ip?: string
+  ): Promise<{ user: IUser; emailSent: boolean }> {
     const existing = await userRepository.findByEmail(params.email);
     if (existing) {
       throw new ConflictError('An account with this email already exists');
@@ -192,7 +208,7 @@ class AuthService {
     return { user, emailSent };
   }
 
-  async login(email: string, password: string, ip?: string): Promise<AuthResult> {
+  async login(email: string, password: string, ip?: string): Promise<AuthResult | TotpChallenge> {
     const user = await userRepository.findByEmail(email, true);
     if (!user || !user.password) {
       throw new UnauthorizedError('Invalid email or password');
@@ -215,6 +231,31 @@ class AuthService {
       throw emailNotVerifiedError();
     }
 
+    // 2FA-enabled accounts get a short-lived challenge instead of tokens.
+    if (user.isTotpEnabled) {
+      return { requiresTotp: true, challengeToken: signTotpChallengeToken(user._id.toString()) };
+    }
+
+    return this.finalizeLogin(user, ip);
+  }
+
+  /** Exchange a TOTP challenge + authenticator code for a real session. */
+  async completeTotpLogin(challengeToken: string, code: string, ip?: string): Promise<AuthResult> {
+    const { userId } = verifyTotpChallengeToken(challengeToken);
+    const user = await userRepository.findById(userId, '+totpSecret');
+    if (!user || !user.isTotpEnabled || !user.totpSecret) {
+      throw new UnauthorizedError('2FA is not enabled for this account');
+    }
+    if (user.isSuspended) throw accountSuspendedError();
+    if (!verifyTotpCode(code, user.totpSecret)) {
+      throw new UnauthorizedError('Incorrect authentication code');
+    }
+    user.totpSecret = undefined;
+    return this.finalizeLogin(user, ip);
+  }
+
+  /** Shared tail of every successful password login: stamp, audit, issue tokens. */
+  private async finalizeLogin(user: IUser, ip?: string): Promise<AuthResult> {
     await userRepository.updateById(user._id, { lastLoginAt: new Date() });
     await activityService.log({
       workspace: user.workspace.toString(),
