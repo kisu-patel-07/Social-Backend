@@ -127,15 +127,26 @@ class SubscriptionService {
       subscription.currentPeriodEnd.getTime() < Date.now();
 
     if (paidLapsed) {
-      const freePlan = await planRepository.findByCode('free');
+      const freePlan = await planRepository.findFreeActivePlan();
       if (freePlan) {
+        // The plan period is over — any admin-granted bonus goes with it.
         await subscriptionRepository.updateById(subscription._id, {
           $set: {
             plan: freePlan._id,
             currentPeriodStart: new Date(),
             currentPeriodEnd: addDays(new Date(), 3650),
           },
+          $unset: { bonus: '' },
         });
+        if (subscription.bonus) {
+          await activityService.log({
+            workspace: workspaceId,
+            action: ActivityAction.ADMIN_BONUS_REMOVED,
+            description: 'Bonus benefits removed automatically — the plan period ended',
+            entityType: 'Subscription',
+            entityId: subscription._id,
+          });
+        }
         await this.notifyWorkspaceOwner(
           workspaceId,
           `Your ${plan?.name ?? 'paid'} plan has ended`,
@@ -143,10 +154,16 @@ class SubscriptionService {
         );
         return { allowed: true };
       }
-      // No free plan seeded to fall back to — lock instead.
+      // No ₹0 plan to fall back to — pause access until they renew.
       await subscriptionRepository.updateById(subscription._id, {
         $set: { status: SubscriptionStatus.EXPIRED },
+        $unset: { bonus: '' },
       });
+      await this.notifyWorkspaceOwner(
+        workspaceId,
+        `Your ${plan?.name ?? ''} plan has ended`,
+        'Automations are paused. Renew from Billing to keep replying automatically.'
+      );
       return { allowed: false, reason: 'SUBSCRIPTION_INACTIVE' };
     }
 
@@ -184,16 +201,24 @@ class SubscriptionService {
     }
   }
 
-  /** Resolve the workspace's current limits + feature entitlements from its plan. */
+  /**
+   * Resolve the workspace's current limits + feature entitlements from its
+   * plan, including any admin-granted bonus on top (unlimited stays unlimited).
+   */
   async getEntitlements(workspaceId: string): Promise<WorkspaceEntitlements> {
     const subscription = await subscriptionRepository.findByWorkspace(workspaceId);
     const plan = subscription?.plan as unknown as IPlan | null;
     if (!plan) return UNRESTRICTED;
+    const bonus = subscription?.bonus;
+    const boosted = (limit: number, extra: number) => (limit === -1 ? -1 : limit + extra);
     return {
       limits: {
-        connectedAccounts: plan.limits?.connectedAccounts ?? -1,
-        automations: plan.limits?.automations ?? -1,
-        monthlyMessages: plan.limits?.monthlyMessages ?? -1,
+        connectedAccounts: boosted(
+          plan.limits?.connectedAccounts ?? -1,
+          bonus?.connectedAccounts ?? 0
+        ),
+        automations: boosted(plan.limits?.automations ?? -1, bonus?.automations ?? 0),
+        monthlyMessages: boosted(plan.limits?.monthlyMessages ?? -1, bonus?.monthlyMessages ?? 0),
         teamMembers: plan.limits?.teamMembers ?? -1,
       },
       entitlements: {
@@ -214,6 +239,8 @@ class SubscriptionService {
     if (!plan || !plan.isActive) throw new NotFoundError('Plan not found');
 
     const now = new Date();
+    // Bonuses are scoped to the plan they were granted on; switching drops them.
+    const previous = await subscriptionRepository.findByWorkspace(user.workspaceId);
     // Free never lapses; paid plans run for their interval/durationDays.
     const periodEnd = plan.priceAmount > 0 ? planPeriodEnd(plan, now) : addDays(now, 3650);
     const updated = await subscriptionRepository.updateOne(
@@ -226,10 +253,20 @@ class SubscriptionService {
           currentPeriodEnd: periodEnd,
           cancelAtPeriodEnd: false,
         },
-        $unset: { trialEndsAt: '', trialEndingNotifiedAt: '' },
+        $unset: { trialEndsAt: '', trialEndingNotifiedAt: '', bonus: '' },
       },
       { new: true, upsert: true }
     );
+
+    if (previous?.bonus) {
+      await activityService.log({
+        workspace: user.workspaceId,
+        action: ActivityAction.ADMIN_BONUS_REMOVED,
+        description: 'Bonus benefits removed automatically — the plan was changed',
+        entityType: 'Subscription',
+        entityId: previous._id,
+      });
+    }
 
     await activityService.log({
       workspace: user.workspaceId,
@@ -317,7 +354,7 @@ class SubscriptionService {
           currentPeriodEnd: periodEnd,
           cancelAtPeriodEnd: false,
         },
-        $unset: { trialEndsAt: '', trialEndingNotifiedAt: '' },
+        $unset: { trialEndsAt: '', trialEndingNotifiedAt: '', bonus: '' },
       },
       { new: true, upsert: true }
     );

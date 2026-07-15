@@ -37,6 +37,7 @@ import { generateOtp, hashOtp, verifyOtp } from '../utils/otp';
 import { comparePassword, hashPassword } from '../utils/password';
 import { verifyTotpCode } from '../utils/totp';
 import { activityService } from './activity.service';
+import { planPeriodEnd } from './subscription.service';
 import { emailService } from './email/email.service';
 
 interface RegisterParams {
@@ -104,18 +105,17 @@ class AuthService {
       owner: ownerId,
     });
 
-    // Every new workspace starts on the Free plan (active, no trial); users
-    // upgrade to a paid plan via Razorpay checkout whenever they need more.
-    const plan =
-      (await planRepository.findByCode('free')) ?? (await planRepository.listActive())[0];
+    // Every new workspace starts on the default plan with its FIRST period
+    // free of charge: a ₹0 plan never lapses; a paid default runs one normal
+    // period, after which the user renews at the plan's price at that time.
+    const plan = await planRepository.findDefaultSignupPlan();
     if (plan) {
       await subscriptionRepository.create({
         workspace: workspace._id,
         plan: plan._id,
         status: SubscriptionStatus.ACTIVE,
         currentPeriodStart: new Date(),
-        // Free never lapses; a far-future period end keeps the model happy.
-        currentPeriodEnd: addDays(new Date(), 3650),
+        currentPeriodEnd: plan.priceAmount > 0 ? planPeriodEnd(plan) : addDays(new Date(), 3650),
       });
     }
 

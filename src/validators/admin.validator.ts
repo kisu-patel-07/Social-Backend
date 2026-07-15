@@ -114,6 +114,17 @@ export const adminAutomationStatusSchema = z.object({
   }),
 });
 
+/** PATCH /admin/subscriptions/:id/bonus */
+export const adminGrantBonusSchema = z.object({
+  params: idParamSchema,
+  body: z.object({
+    monthlyMessages: z.coerce.number().int().min(0).max(1000000).optional(),
+    automations: z.coerce.number().int().min(0).max(1000).optional(),
+    connectedAccounts: z.coerce.number().int().min(0).max(100).optional(),
+    note: z.string().trim().max(200).optional(),
+  }),
+});
+
 /** GET /admin/payments query. */
 export const adminListPaymentsSchema = z.object({
   query: paginationQuerySchema.extend({

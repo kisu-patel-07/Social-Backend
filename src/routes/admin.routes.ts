@@ -8,6 +8,7 @@ import {
   adminBannerSchema,
   adminBroadcastSchema,
   adminCreatePlanSchema,
+  adminGrantBonusSchema,
   adminListActivitySchema,
   adminListAutomationsSchema,
   adminListPaymentsSchema,
@@ -70,6 +71,11 @@ router.patch(
   '/subscriptions/:id',
   validate(adminUpdateSubscriptionSchema),
   adminController.updateSubscription
+);
+router.patch(
+  '/subscriptions/:id/bonus',
+  validate(adminGrantBonusSchema),
+  adminController.grantBonus
 );
 
 // Plans

@@ -23,6 +23,7 @@ import { StudioAutomationModel } from '../models/studioAutomation.model';
 import { ISystemBanner, SystemSettingModel } from '../models/systemSetting.model';
 import { metaClient } from './meta';
 import { logger } from '../config/logger';
+import { planPeriodEnd } from './subscription.service';
 import { signAccessToken } from '../utils/jwt';
 import { buildTotpUri, generateTotpSecret, totpQrDataUrl, verifyTotpCode } from '../utils/totp';
 import { CsvColumn, toCsv } from '../utils/csv';
@@ -535,7 +536,11 @@ class AdminService {
       const plan = await planRepository.findById(params.planId);
       if (!plan) throw new NotFoundError('Plan not found');
       set.plan = plan._id;
-      changes.push(`plan → ${plan.code}`);
+      // Changing the plan starts a fresh period of the new plan's length
+      // (₹0 plans never lapse). extendDays below stacks on top if given.
+      set.currentPeriodStart = new Date();
+      set.currentPeriodEnd = plan.priceAmount > 0 ? planPeriodEnd(plan) : addDays(new Date(), 3650);
+      changes.push(`plan → ${plan.code} (new period)`);
     }
     if (params.status) {
       set.status = params.status;
@@ -545,7 +550,8 @@ class AdminService {
       changes.push(`status → ${params.status}`);
     }
     if (params.extendDays) {
-      set.currentPeriodEnd = addDays(subscription.currentPeriodEnd, params.extendDays);
+      const base = (set.currentPeriodEnd as Date) ?? subscription.currentPeriodEnd;
+      set.currentPeriodEnd = addDays(base, params.extendDays);
       if (subscription.trialEndsAt && subscription.status === SubscriptionStatus.TRIALING) {
         set.trialEndsAt = addDays(subscription.trialEndsAt, params.extendDays);
       }
@@ -569,6 +575,75 @@ class AdminService {
       description: `${actor.email} updated subscription: ${changes.join(', ')}`,
       entityType: 'Subscription',
       entityId: subscription._id,
+    });
+    return updated;
+  }
+
+  /**
+   * Grant (or update) bonus benefits on top of the workspace's current plan —
+   * extra replies/automations/account slots for the ongoing period only.
+   * All-zero amounts remove the bonus. Every grant/removal is audit-logged
+   * with a timestamp, and the grant record survives even after the bonus
+   * itself is auto-removed when the plan ends.
+   */
+  async grantBonus(
+    actor: AuthUser,
+    subscriptionId: string,
+    params: {
+      monthlyMessages?: number;
+      automations?: number;
+      connectedAccounts?: number;
+      note?: string;
+    }
+  ): Promise<ISubscription> {
+    const subscription = await subscriptionRepository.findById(subscriptionId);
+    if (!subscription) throw new NotFoundError('Subscription not found');
+
+    const amounts = {
+      monthlyMessages: Math.max(0, params.monthlyMessages ?? 0),
+      automations: Math.max(0, params.automations ?? 0),
+      connectedAccounts: Math.max(0, params.connectedAccounts ?? 0),
+    };
+    const isRemoval =
+      amounts.monthlyMessages === 0 && amounts.automations === 0 && amounts.connectedAccounts === 0;
+
+    const updated = await subscriptionRepository.updateById(
+      subscription._id,
+      isRemoval
+        ? { $unset: { bonus: '' } }
+        : {
+            $set: {
+              bonus: {
+                ...amounts,
+                grantedAt: new Date(),
+                grantedBy: new Types.ObjectId(actor.id),
+                note: params.note?.trim() || undefined,
+              },
+            },
+          }
+    );
+    if (!updated) throw new NotFoundError('Subscription not found');
+    await updated.populate([
+      { path: 'workspace', select: 'name' },
+      { path: 'plan', select: 'code name priceAmount currency interval durationDays' },
+    ]);
+
+    const parts = [
+      amounts.monthlyMessages > 0 ? `+${amounts.monthlyMessages} replies` : null,
+      amounts.automations > 0 ? `+${amounts.automations} automations` : null,
+      amounts.connectedAccounts > 0 ? `+${amounts.connectedAccounts} accounts` : null,
+    ].filter(Boolean);
+
+    await activityService.log({
+      workspace: subscription.workspace.toString(),
+      user: actor.id,
+      action: isRemoval ? ActivityAction.ADMIN_BONUS_REMOVED : ActivityAction.ADMIN_BONUS_GRANTED,
+      description: isRemoval
+        ? `${actor.email} removed the bonus benefits`
+        : `${actor.email} granted bonus benefits: ${parts.join(', ')}${params.note ? ` — "${params.note.trim()}"` : ''} (valid for the current plan period)`,
+      entityType: 'Subscription',
+      entityId: subscription._id,
+      metadata: isRemoval ? undefined : amounts,
     });
     return updated;
   }

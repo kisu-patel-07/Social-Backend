@@ -61,6 +61,12 @@ export const adminController = {
     sendSuccess(res, subscription, 'Subscription updated');
   }),
 
+  grantBonus: asyncHandler(async (req: Request, res: Response) => {
+    const subscription = await adminService.grantBonus(req.user!, req.params.id, req.body);
+    const removed = !subscription.bonus;
+    sendSuccess(res, subscription, removed ? 'Bonus removed' : 'Bonus benefits granted');
+  }),
+
   // ---- Plans ----------------------------------------------------------------
   listPlans: asyncHandler(async (_req: Request, res: Response) => {
     const plans = await adminService.listPlans();

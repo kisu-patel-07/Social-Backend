@@ -167,6 +167,8 @@ export enum ActivityAction {
   ADMIN_2FA_DISABLED = 'admin.2fa_disabled',
   ADMIN_NOTES_UPDATED = 'admin.notes_updated',
   ADMIN_BANNER_UPDATED = 'admin.banner_updated',
+  ADMIN_BONUS_GRANTED = 'admin.bonus_granted',
+  ADMIN_BONUS_REMOVED = 'admin.bonus_removed',
 }
 
 export enum TokenType {
