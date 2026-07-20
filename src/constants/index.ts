@@ -25,6 +25,14 @@ export enum AutomationStatus {
   PAUSED = 'paused',
 }
 
+/** What starts a classic automation: a post comment or an incoming DM. */
+export enum AutomationTrigger {
+  COMMENT = 'comment',
+  DM = 'dm',
+  /** Reply sent when someone responds to a story (targetPostId = story id). */
+  STORY = 'story',
+}
+
 export enum KeywordMatchType {
   EXACT = 'exact',
   CONTAINS = 'contains',

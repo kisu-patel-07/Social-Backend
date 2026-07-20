@@ -50,6 +50,9 @@ const envSchema = z.object({
   RAZORPAY_KEY_ID: z.string().default(''),
   RAZORPAY_KEY_SECRET: z.string().default(''),
 
+  /** Public base of this API — used to build tracked short links (/r/:slug). */
+  PUBLIC_API_URL: z.string().default('http://localhost:5000/api/v1'),
+
   /** Shared secret for scheduled-job endpoints (Vercel Cron sends it as a Bearer token). */
   CRON_SECRET: z.string().default(''),
 

@@ -1,5 +1,5 @@
 import { Schema, model, Document, Types } from 'mongoose';
-import { AutomationStatus, Platform } from '../constants';
+import { AutomationStatus, AutomationTrigger, Platform } from '../constants';
 
 export interface IAutomation extends Document {
   _id: Types.ObjectId;
@@ -8,9 +8,12 @@ export interface IAutomation extends Document {
   socialAccount: Types.ObjectId;
   platform: Platform;
   name: string;
+  /** What starts this automation: a post comment (default) or an incoming DM. */
+  triggerType: AutomationTrigger;
   /** Optional: restrict to a specific post/media; empty = all posts. */
   targetPostId?: string;
-  publicReply: string;
+  /** Public comment reply — not used by DM-triggered automations. */
+  publicReply?: string;
   privateMessage: string;
   status: AutomationStatus;
   /** Denormalized keyword strings (lowercased) for fast matching at webhook time. */
@@ -34,8 +37,14 @@ const automationSchema = new Schema<IAutomation>(
     },
     platform: { type: String, enum: Object.values(Platform), required: true },
     name: { type: String, required: true, trim: true, maxlength: 120 },
+    triggerType: {
+      type: String,
+      enum: Object.values(AutomationTrigger),
+      default: AutomationTrigger.COMMENT,
+      index: true,
+    },
     targetPostId: { type: String, trim: true },
-    publicReply: { type: String, required: true, maxlength: 2000 },
+    publicReply: { type: String, maxlength: 2000 },
     privateMessage: { type: String, required: true, maxlength: 2000 },
     status: {
       type: String,

@@ -75,5 +75,7 @@ export interface IncomingMessage {
   text: string;
   fromId: string;
   toId: string;
+  /** Set when this DM is a reply to a story (the story's media id). */
+  replyToStoryId?: string;
   createdTime?: Date;
 }

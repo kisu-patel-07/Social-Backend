@@ -4,6 +4,7 @@ import { logger } from '../config/logger';
 import {
   ActivityAction,
   AutomationStatus,
+  AutomationTrigger,
   LeadSource,
   LeadStatus,
   MessageDirection,
@@ -29,6 +30,7 @@ import { analyticsService } from './analytics.service';
 import { emailService } from './email/email.service';
 import { IncomingComment, IncomingMessage, metaClient, parseWebhookPayload } from './meta';
 import { notificationService } from './notification.service';
+import { linkTrackingService } from './linkTracking.service';
 import { studioEngineService } from './studioEngine.service';
 import { subscriptionService } from './subscription.service';
 
@@ -235,6 +237,8 @@ class WebhookService {
     automation: IAutomation,
     comment: IncomingComment
   ): Promise<void> {
+    // DM-triggered automations have no public reply; nothing to send.
+    if (!automation.publicReply) return;
     const msg = await messageRepository.create({
       workspace: account.workspace,
       socialAccount: account._id,
@@ -274,6 +278,11 @@ class WebhookService {
     comment: IncomingComment,
     conversationId: Types.ObjectId
   ): Promise<void> {
+    // Route any links through tracked redirects so the automation reports clicks.
+    const dmText = await linkTrackingService.wrapText(
+      { workspaceId: account.workspace.toString(), automationId: automation._id.toString() },
+      automation.privateMessage
+    );
     const dm = await messageRepository.create({
       workspace: account.workspace,
       socialAccount: account._id,
@@ -283,7 +292,7 @@ class WebhookService {
       type: MessageType.DIRECT_MESSAGE,
       status: MessageStatus.PENDING,
       toId: comment.fromId,
-      text: automation.privateMessage,
+      text: dmText,
       automation: automation._id,
       isAutomated: true,
     });
@@ -291,7 +300,7 @@ class WebhookService {
       await metaClient.sendPrivateReply(
         account.pageId!,
         comment.commentId,
-        automation.privateMessage,
+        dmText,
         account.accessToken
       );
       await messageRepository.updateById(dm._id, { status: MessageStatus.SENT });
@@ -498,6 +507,114 @@ class WebhookService {
     );
 
     await this.upsertDmContact(account, message, conversation, now);
+
+    // DM keyword automations: auto-reply inside the thread when a keyword hits.
+    await this.runDmAutomations(account, message, conversation._id, now);
+  }
+
+  /** Match and run DM-triggered automations for an inbound direct message. */
+  private async runDmAutomations(
+    account: ISocialAccount,
+    message: IncomingMessage,
+    conversationId: Types.ObjectId,
+    now: Date
+  ): Promise<void> {
+    // Story replies: match story-triggered automations first (pinned to this
+    // story or "any story"; empty keywords = every reply triggers).
+    let match: { automation: IAutomation; keyword?: string } | null = null;
+    if (message.replyToStoryId) {
+      const storyAutomations = (
+        await automationRepository.findActiveDmAutomations(
+          account._id.toString(),
+          AutomationTrigger.STORY
+        )
+      ).filter((a) => !a.targetPostId || a.targetPostId === message.replyToStoryId);
+      match =
+        storyAutomations.find((a) => a.keywords.length === 0) != null
+          ? { automation: storyAutomations.find((a) => a.keywords.length === 0)! }
+          : this.matchAutomation(storyAutomations, message.text);
+    }
+
+    // Fall through to DM keyword automations.
+    if (!match) {
+      const automations = await automationRepository.findActiveDmAutomations(
+        account._id.toString()
+      );
+      if (automations.length === 0) return;
+      match = this.matchAutomation(automations, message.text);
+    }
+    if (!match) return;
+
+    // Same billing gates as comment automations.
+    const access = await subscriptionService.getAccessState(account.workspace.toString());
+    if (!access.allowed) {
+      logger.info('DM automation skipped: subscription inactive', {
+        workspace: account.workspace.toString(),
+      });
+      return;
+    }
+    const { limits } = await subscriptionService.getEntitlements(account.workspace.toString());
+    if (limits.monthlyMessages !== -1) {
+      const startOfMonth = new Date();
+      startOfMonth.setDate(1);
+      startOfMonth.setHours(0, 0, 0, 0);
+      const sentThisMonth = await messageRepository.count({
+        workspace: account.workspace,
+        direction: MessageDirection.OUTBOUND,
+        createdAt: { $gte: startOfMonth },
+      });
+      if (sentThisMonth >= limits.monthlyMessages) {
+        logger.info('DM automation skipped: monthly reply limit reached', {
+          workspace: account.workspace.toString(),
+        });
+        return;
+      }
+    }
+
+    const { automation, keyword } = match;
+    const replyText = await linkTrackingService.wrapText(
+      { workspaceId: account.workspace.toString(), automationId: automation._id.toString() },
+      automation.privateMessage
+    );
+
+    const dm = await messageRepository.create({
+      workspace: account.workspace,
+      socialAccount: account._id,
+      conversation: conversationId,
+      platform: message.platform,
+      direction: MessageDirection.OUTBOUND,
+      type: MessageType.DIRECT_MESSAGE,
+      status: MessageStatus.PENDING,
+      toId: message.fromId,
+      text: replyText,
+      automation: automation._id,
+      isAutomated: true,
+    });
+    try {
+      await metaClient.sendDirectMessage(
+        account.pageId!,
+        message.fromId,
+        replyText,
+        account.accessToken
+      );
+      await messageRepository.updateById(dm._id, { status: MessageStatus.SENT });
+      await automationRepository.registerTrigger(automation._id.toString(), now);
+      await analyticsService.track(account.workspace.toString(), 'dmSent', message.platform);
+      logger.info('DM automation replied', {
+        automation: automation.name,
+        keyword,
+        toId: message.fromId,
+      });
+    } catch (error) {
+      logger.error('DM automation reply FAILED', {
+        automation: automation.name,
+        error: (error as Error).message,
+      });
+      await messageRepository.updateById(dm._id, {
+        status: MessageStatus.FAILED,
+        error: (error as Error).message,
+      });
+    }
   }
 
   /**

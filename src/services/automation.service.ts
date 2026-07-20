@@ -1,5 +1,11 @@
 import { FilterQuery, Types } from 'mongoose';
-import { ActivityAction, AutomationStatus, KeywordMatchType, Platform } from '../constants';
+import {
+  ActivityAction,
+  AutomationStatus,
+  AutomationTrigger,
+  KeywordMatchType,
+  Platform,
+} from '../constants';
 import { IAutomation } from '../models/automation.model';
 import {
   automationRepository,
@@ -18,10 +24,11 @@ interface CreateAutomationParams {
   name: string;
   socialAccountId: string;
   platform: Platform;
+  triggerType?: AutomationTrigger;
   targetPostId?: string;
   keywords: string[];
   matchType?: KeywordMatchType;
-  publicReply: string;
+  publicReply?: string;
   privateMessage: string;
   status?: AutomationStatus;
 }
@@ -48,20 +55,35 @@ class AutomationService {
     return [...new Set(keywords.map((k) => k.toLowerCase().trim()).filter(Boolean))];
   }
 
-  /** Throw if any keyword is already used by another automation on the account. */
+  /**
+   * Throw if any keyword is already used by another automation with the SAME
+   * trigger type on this account. Different triggers listen to different
+   * events (comments vs DMs vs story replies), so "price" can safely exist
+   * once per trigger type.
+   */
   private async assertNoDuplicateKeywords(
     socialAccountId: string,
     keywords: string[],
+    triggerType: AutomationTrigger,
     excludeAutomationId?: string
   ): Promise<void> {
-    const dupes = await keywordRepository.findDuplicates(
-      socialAccountId,
-      keywords,
-      excludeAutomationId
-    );
+    if (keywords.length === 0) return;
+    const conflicting = await automationRepository.find({
+      socialAccount: socialAccountId,
+      // Legacy docs predate triggerType and are comment automations.
+      triggerType:
+        triggerType === AutomationTrigger.COMMENT
+          ? { $in: [AutomationTrigger.COMMENT, null] }
+          : triggerType,
+      keywords: { $in: keywords },
+      ...(excludeAutomationId ? { _id: { $ne: excludeAutomationId } } : {}),
+    });
+    const dupes = [
+      ...new Set(conflicting.flatMap((a) => a.keywords.filter((k) => keywords.includes(k)))),
+    ];
     if (dupes.length) {
       throw new ConflictError(
-        `These keywords are already in use on this account: ${dupes.join(', ')}`,
+        `These keywords are already used by another ${triggerType} automation on this account: ${dupes.join(', ')}`,
         { keywords: dupes }
       );
     }
@@ -107,8 +129,15 @@ class AutomationService {
     }
 
     const keywords = this.normalizeKeywords(params.keywords);
-    if (!keywords.length) throw new BadRequestError('At least one keyword is required');
-    await this.assertNoDuplicateKeywords(params.socialAccountId, keywords);
+    // Story automations may run keyword-less ("every story reply").
+    if (!keywords.length && params.triggerType !== AutomationTrigger.STORY) {
+      throw new BadRequestError('At least one keyword is required');
+    }
+    await this.assertNoDuplicateKeywords(
+      params.socialAccountId,
+      keywords,
+      params.triggerType ?? AutomationTrigger.COMMENT
+    );
 
     const matchType = params.matchType ?? KeywordMatchType.CONTAINS;
     const automation = await automationRepository.create({
@@ -118,13 +147,18 @@ class AutomationService {
       name: params.name,
       targetPostId: params.targetPostId,
       keywords,
+      triggerType: params.triggerType ?? AutomationTrigger.COMMENT,
       publicReply: params.publicReply,
       privateMessage: params.privateMessage,
       status: params.status ?? AutomationStatus.ACTIVE,
       createdBy: new Types.ObjectId(user.id),
     });
 
-    await this.syncKeywords(automation, keywords, matchType);
+    // Keyword docs power the COMMENT pipeline only; DM/story automations skip
+    // them (the collection has an account-wide unique index on keyword).
+    if ((params.triggerType ?? AutomationTrigger.COMMENT) === AutomationTrigger.COMMENT) {
+      await this.syncKeywords(automation, keywords, matchType);
+    }
     await Promise.all([
       analyticsService.refreshWorkspaceStats(user.workspaceId),
       activityService.log({
@@ -165,10 +199,14 @@ class AutomationService {
     let keywords: string[] | undefined;
     if (params.keywords) {
       keywords = this.normalizeKeywords(params.keywords);
-      if (!keywords.length) throw new BadRequestError('At least one keyword is required');
+      // Story automations may run keyword-less ("every story reply").
+      if (!keywords.length && automation.triggerType !== AutomationTrigger.STORY) {
+        throw new BadRequestError('At least one keyword is required');
+      }
       await this.assertNoDuplicateKeywords(
         automation.socialAccount.toString(),
         keywords,
+        automation.triggerType ?? AutomationTrigger.COMMENT,
         automation._id.toString()
       );
     }
@@ -185,7 +223,12 @@ class AutomationService {
     if (!updated) throw new NotFoundError('Automation not found');
 
     if (keywords) {
-      await this.syncKeywords(updated, keywords, params.matchType ?? KeywordMatchType.CONTAINS);
+      if ((updated.triggerType ?? AutomationTrigger.COMMENT) === AutomationTrigger.COMMENT) {
+        await this.syncKeywords(updated, keywords, params.matchType ?? KeywordMatchType.CONTAINS);
+      } else {
+        // Drop stale keyword docs so they can't block future comment automations.
+        await keywordRepository.deleteMany({ automation: updated._id });
+      }
     }
 
     await Promise.all([

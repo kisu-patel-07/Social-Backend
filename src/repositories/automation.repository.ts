@@ -1,6 +1,6 @@
 import { FilterQuery } from 'mongoose';
 import { AutomationModel, IAutomation } from '../models/automation.model';
-import { AutomationStatus } from '../constants';
+import { AutomationStatus, AutomationTrigger } from '../constants';
 import { BaseRepository } from './base.repository';
 
 class AutomationRepository extends BaseRepository<IAutomation> {
@@ -16,12 +16,26 @@ class AutomationRepository extends BaseRepository<IAutomation> {
     const filter: FilterQuery<IAutomation> = {
       socialAccount: socialAccountId,
       status: AutomationStatus.ACTIVE,
+      // DM-triggered automations never respond to comments.
+      triggerType: { $ne: AutomationTrigger.DM },
     };
     // Either the automation targets all posts, or it targets this specific post.
     if (postId) {
       filter.$or = [{ targetPostId: { $in: [null, ''] } }, { targetPostId: postId }];
     }
     return this.find(filter);
+  }
+
+  /** Active DM- or story-triggered automations (webhook DM pipeline). */
+  findActiveDmAutomations(
+    socialAccountId: string,
+    trigger: AutomationTrigger = AutomationTrigger.DM
+  ): Promise<IAutomation[]> {
+    return this.find({
+      socialAccount: socialAccountId,
+      status: AutomationStatus.ACTIVE,
+      triggerType: trigger,
+    });
   }
 
   countActiveByWorkspace(workspaceId: string): Promise<number> {

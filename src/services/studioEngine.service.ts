@@ -24,6 +24,7 @@ import { activityService } from './activity.service';
 import { analyticsService } from './analytics.service';
 import { emailService } from './email/email.service';
 import { featureService } from './feature.service';
+import { linkTrackingService } from './linkTracking.service';
 import { subscriptionService } from './subscription.service';
 import { IncomingComment, metaClient } from './meta';
 import { notificationService } from './notification.service';
@@ -203,6 +204,18 @@ class StudioEngineService {
     comment: IncomingComment,
     conversationId: Types.ObjectId
   ): Promise<boolean> {
+    // Route DM text links + button URLs through tracked redirects (click stats).
+    const linkSource = {
+      workspaceId: account.workspace.toString(),
+      studioAutomationId: automation._id.toString(),
+    };
+    const dmText = await linkTrackingService.wrapText(linkSource, automation.dmMessage);
+    const buttons = await Promise.all(
+      automation.dmButtons.map(async (b) => ({
+        title: b.title,
+        url: await linkTrackingService.wrapUrl(linkSource, b.url),
+      }))
+    );
     const dm = await messageRepository.create({
       workspace: account.workspace,
       socialAccount: account._id,
@@ -212,7 +225,7 @@ class StudioEngineService {
       type: MessageType.DIRECT_MESSAGE,
       status: MessageStatus.PENDING,
       toId: comment.fromId,
-      text: automation.dmMessage,
+      text: dmText,
       automation: automation._id,
       isAutomated: true,
     });
@@ -220,8 +233,8 @@ class StudioEngineService {
       await metaClient.sendPrivateReplyWithButtons(
         account.pageId!,
         comment.commentId,
-        automation.dmMessage,
-        automation.dmButtons.map((b) => ({ title: b.title, url: b.url })),
+        dmText,
+        buttons,
         account.accessToken
       );
       await messageRepository.updateById(dm._id, { status: MessageStatus.SENT });

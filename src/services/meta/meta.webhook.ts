@@ -96,6 +96,8 @@ export function parseWebhookPayload(payload: unknown): ParsedEvents {
         text: (msg.message.text || '') as string,
         fromId: (msg.sender?.id || '') as string,
         toId: (msg.recipient?.id || accountExternalId) as string,
+        // Present when the DM is a reply to a story — identifies which story.
+        replyToStoryId: (msg.message.reply_to?.story?.id as string | undefined) || undefined,
         createdTime: msg.timestamp ? new Date(Number(msg.timestamp)) : undefined,
       });
     }
