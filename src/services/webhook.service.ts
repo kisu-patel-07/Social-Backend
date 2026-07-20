@@ -540,10 +540,13 @@ class WebhookService {
       const automations = await automationRepository.findActiveDmAutomations(
         account._id.toString()
       );
-      if (automations.length === 0) return;
       match = this.matchAutomation(automations, message.text);
     }
-    if (!match) return;
+    // Classic wins; otherwise give Studio DM/story automations a chance.
+    if (!match) {
+      await studioEngineService.handleIncomingDm(account, message, conversationId);
+      return;
+    }
 
     // Same billing gates as comment automations.
     const access = await subscriptionService.getAccessState(account.workspace.toString());

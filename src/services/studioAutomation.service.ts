@@ -1,6 +1,7 @@
 import { FilterQuery, Types } from 'mongoose';
 import {
   ActivityAction,
+  AutomationTrigger,
   Platform,
   StudioAutomationStatus,
   StudioKeywordMode,
@@ -19,6 +20,7 @@ interface StudioAutomationParams {
   name: string;
   socialAccountId: string;
   platform: Platform;
+  triggerType?: AutomationTrigger;
   postScope: StudioPostScope;
   postIds: string[];
   keywordMode: StudioKeywordMode;
@@ -96,6 +98,7 @@ class StudioAutomationService {
 
     const candidate = {
       status: params.status ?? StudioAutomationStatus.DRAFT,
+      triggerType: params.triggerType ?? AutomationTrigger.COMMENT,
       postScope: params.postScope,
       postIds: params.postScope === StudioPostScope.SPECIFIC ? params.postIds : [],
       keywordMode: params.keywordMode,

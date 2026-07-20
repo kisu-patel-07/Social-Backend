@@ -3,12 +3,15 @@ import { env } from '../config/env';
 import { logger } from '../config/logger';
 import {
   ActivityAction,
+  AutomationTrigger,
   LeadStatus,
   MessageDirection,
   MessageStatus,
   MessageType,
   NotificationType,
+  Platform,
   StudioKeywordMode,
+  StudioPostScope,
 } from '../constants';
 import { IStudioAutomation } from '../models/studioAutomation.model';
 import { ISocialAccount } from '../models/socialAccount.model';
@@ -88,6 +91,107 @@ class StudioEngineService {
    * Returns true when an automation fired (so callers can log accordingly).
    * The inbound comment itself was already recorded by the caller.
    */
+  /**
+   * DM pipeline entry: run DM- or story-triggered Studio automations for an
+   * inbound direct message. Returns true when one replied. Buttons are
+   * appended as text lines (DM replies have no button template).
+   */
+  async handleIncomingDm(
+    account: ISocialAccount,
+    message: { fromId: string; text: string; replyToStoryId?: string; platform: Platform },
+    conversationId: Types.ObjectId
+  ): Promise<boolean> {
+    const studioEnabled = await featureService.isEnabled('studio', account.workspace.toString());
+    if (!studioEnabled) return false;
+    const { entitlements } = await subscriptionService.getEntitlements(
+      account.workspace.toString()
+    );
+    if (!entitlements.studio) return false;
+
+    const trigger = message.replyToStoryId ? AutomationTrigger.STORY : AutomationTrigger.DM;
+    let candidates = await studioAutomationRepository.findActiveByTrigger(
+      account._id.toString(),
+      trigger
+    );
+    if (trigger === AutomationTrigger.STORY) {
+      // postScope/postIds double as story targeting for story triggers.
+      candidates = candidates.filter(
+        (a) =>
+          a.postScope === StudioPostScope.ALL || a.postIds.includes(message.replyToStoryId!)
+      );
+    }
+
+    const haystack = message.text.toLowerCase();
+    for (const automation of candidates) {
+      const result = this.matchText(automation, haystack);
+      if (!result.matched) continue;
+      if (
+        automation.oncePerUser &&
+        (await this.alreadyMessaged(account, automation, message.fromId))
+      ) {
+        continue;
+      }
+
+      const linkSource = {
+        workspaceId: account.workspace.toString(),
+        studioAutomationId: automation._id.toString(),
+      };
+      const buttonLines = automation.dmButtons.length
+        ? '\n\n' +
+          (
+            await Promise.all(
+              automation.dmButtons.map(
+                async (b) => `${b.title}: ${await linkTrackingService.wrapUrl(linkSource, b.url)}`
+              )
+            )
+          ).join('\n')
+        : '';
+      const replyText =
+        (await linkTrackingService.wrapText(linkSource, automation.dmMessage)) + buttonLines;
+
+      const dm = await messageRepository.create({
+        workspace: account.workspace,
+        socialAccount: account._id,
+        conversation: conversationId,
+        platform: message.platform,
+        direction: MessageDirection.OUTBOUND,
+        type: MessageType.DIRECT_MESSAGE,
+        status: MessageStatus.PENDING,
+        toId: message.fromId,
+        text: replyText,
+        automation: automation._id,
+        isAutomated: true,
+      });
+      try {
+        await metaClient.sendDirectMessage(
+          account.pageId!,
+          message.fromId,
+          replyText,
+          account.accessToken
+        );
+        await messageRepository.updateById(dm._id, { status: MessageStatus.SENT });
+        await studioAutomationRepository.updateById(automation._id, {
+          $inc: { triggerCount: 1, dmSentCount: 1 },
+          $set: { lastTriggeredAt: new Date() },
+        });
+        await analyticsService.track(account.workspace.toString(), 'dmSent', message.platform);
+        logger.info('Studio DM automation replied', { automation: automation.name, trigger });
+        return true;
+      } catch (error) {
+        logger.error('Studio DM automation reply FAILED', {
+          automation: automation.name,
+          error: (error as Error).message,
+        });
+        await messageRepository.updateById(dm._id, {
+          status: MessageStatus.FAILED,
+          error: (error as Error).message,
+        });
+        return false;
+      }
+    }
+    return false;
+  }
+
   async handleComment(account: ISocialAccount, comment: IncomingComment): Promise<boolean> {
     // Honor the admin kill switch / rollout even for already-active automations.
     const studioEnabled = await featureService.isEnabled('studio', account.workspace.toString());

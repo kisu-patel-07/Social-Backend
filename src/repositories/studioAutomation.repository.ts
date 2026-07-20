@@ -1,6 +1,6 @@
 import { FilterQuery } from 'mongoose';
 import { IStudioAutomation, StudioAutomationModel } from '../models/studioAutomation.model';
-import { StudioAutomationStatus, StudioPostScope } from '../constants';
+import { AutomationTrigger, StudioAutomationStatus, StudioPostScope } from '../constants';
 import { BaseRepository } from './base.repository';
 
 class StudioAutomationRepository extends BaseRepository<IStudioAutomation> {
@@ -16,6 +16,8 @@ class StudioAutomationRepository extends BaseRepository<IStudioAutomation> {
     const filter: FilterQuery<IStudioAutomation> = {
       socialAccount: socialAccountId,
       status: StudioAutomationStatus.ACTIVE,
+      // Comment pipeline only; legacy docs (no triggerType) are comment-type.
+      triggerType: { $in: [AutomationTrigger.COMMENT, null] },
     };
     if (postId) {
       filter.$or = [{ postScope: StudioPostScope.ALL }, { postIds: postId }];
@@ -23,6 +25,22 @@ class StudioAutomationRepository extends BaseRepository<IStudioAutomation> {
       filter.postScope = StudioPostScope.ALL;
     }
     return this.find(filter, undefined, { sort: { createdAt: 1 } });
+  }
+
+  /** Active DM- or story-triggered Studio automations for the DM pipeline. */
+  findActiveByTrigger(
+    socialAccountId: string,
+    trigger: AutomationTrigger
+  ): Promise<IStudioAutomation[]> {
+    return this.find(
+      {
+        socialAccount: socialAccountId,
+        status: StudioAutomationStatus.ACTIVE,
+        triggerType: trigger,
+      },
+      undefined,
+      { sort: { createdAt: 1 } }
+    );
   }
 
   countActiveByWorkspace(workspaceId: string): Promise<number> {

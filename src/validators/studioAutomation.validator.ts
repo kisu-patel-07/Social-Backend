@@ -68,6 +68,7 @@ const createBodySchema = z
     name: z.string().trim().min(1).max(120),
     socialAccountId: objectIdSchema,
     platform: z.nativeEnum(Platform),
+    triggerType: z.enum(['comment', 'dm', 'story']).default('comment'),
     postScope: z.nativeEnum(StudioPostScope).default(StudioPostScope.ALL),
     postIds: z.array(z.string().trim().min(1).max(200)).max(10).default([]),
     keywordMode: z.nativeEnum(StudioKeywordMode).default(StudioKeywordMode.CONTAINS),

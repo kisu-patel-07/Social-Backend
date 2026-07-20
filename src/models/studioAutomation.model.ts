@@ -1,5 +1,11 @@
 import { Schema, model, Document, Types } from 'mongoose';
-import { Platform, StudioAutomationStatus, StudioKeywordMode, StudioPostScope } from '../constants';
+import {
+  AutomationTrigger,
+  Platform,
+  StudioAutomationStatus,
+  StudioKeywordMode,
+  StudioPostScope,
+} from '../constants';
 
 /** A call-to-action link button attached to the automated DM. */
 export interface IStudioButton {
@@ -24,6 +30,8 @@ export interface IStudioAutomation extends Document {
   platform: Platform;
   name: string;
   status: StudioAutomationStatus;
+  /** What starts it: comment (default), DM keyword, or story reply. */
+  triggerType: AutomationTrigger;
   postScope: StudioPostScope;
   /** External post/media ids; only used when postScope = SPECIFIC. */
   postIds: string[];
@@ -72,6 +80,12 @@ const studioAutomationSchema = new Schema<IStudioAutomation>(
       type: String,
       enum: Object.values(StudioAutomationStatus),
       default: StudioAutomationStatus.DRAFT,
+      index: true,
+    },
+    triggerType: {
+      type: String,
+      enum: Object.values(AutomationTrigger),
+      default: AutomationTrigger.COMMENT,
       index: true,
     },
     postScope: {
