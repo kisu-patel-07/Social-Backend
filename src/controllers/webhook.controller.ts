@@ -21,8 +21,14 @@ export const webhookController = {
   },
 
   /**
-   * POST — receive webhook events. We verify the signature, immediately ACK
-   * with 200 (Meta retries on non-2xx), then process events asynchronously.
+   * POST — receive webhook events. Verify the signature, process the events,
+   * then ACK with 200 (Meta retries on non-2xx).
+   *
+   * NOTE: processing is awaited BEFORE responding. On serverless (Vercel), the
+   * function is frozen the instant a response is sent, so any fire-and-forget
+   * work after res.send() would be killed and automations would silently never
+   * run. Awaiting is safe because event handling is idempotent (per-event
+   * externalId), so Meta's retry-on-timeout never double-sends.
    */
   receive: asyncHandler(async (req: Request, res: Response) => {
     const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
@@ -41,11 +47,13 @@ export const webhookController = {
       return;
     }
 
-    // Acknowledge first so Meta does not retry; process after responding.
-    res.sendStatus(HttpStatus.OK);
-
-    void webhookService.process(req.body).catch((error) => {
+    try {
+      await webhookService.process(req.body);
+    } catch (error) {
+      // Swallow — still ACK so Meta doesn't hammer retries; idempotency guards
+      // any reprocessing on the next delivery.
       logger.error('Webhook processing error', { error: (error as Error).message });
-    });
+    }
+    res.sendStatus(HttpStatus.OK);
   }),
 };
