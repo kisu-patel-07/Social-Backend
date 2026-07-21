@@ -31,6 +31,8 @@ export enum AutomationTrigger {
   DM = 'dm',
   /** Reply sent when someone responds to a story (targetPostId = story id). */
   STORY = 'story',
+  /** Thank-you DM sent when someone mentions the account in THEIR story. */
+  STORY_MENTION = 'story_mention',
 }
 
 export enum KeywordMatchType {

@@ -98,6 +98,12 @@ export function parseWebhookPayload(payload: unknown): ParsedEvents {
         toId: (msg.recipient?.id || accountExternalId) as string,
         // Present when the DM is a reply to a story — identifies which story.
         replyToStoryId: (msg.message.reply_to?.story?.id as string | undefined) || undefined,
+        // Story mentions arrive as a message with a story_mention attachment.
+        isStoryMention: Array.isArray(msg.message.attachments)
+          ? msg.message.attachments.some(
+              (a: Record<string, any>) => a?.type === 'story_mention'
+            )
+          : undefined,
         createdTime: msg.timestamp ? new Date(Number(msg.timestamp)) : undefined,
       });
     }

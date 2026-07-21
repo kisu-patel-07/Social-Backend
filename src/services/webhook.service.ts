@@ -519,30 +519,40 @@ class WebhookService {
     conversationId: Types.ObjectId,
     now: Date
   ): Promise<void> {
-    // Story replies: match story-triggered automations first (pinned to this
-    // story or "any story"; empty keywords = every reply triggers).
+    // Route by the kind of inbound message. Each kind only ever matches its
+    // own trigger type, so (say) a story mention that happens to contain a
+    // word can never fire a DM-keyword automation.
     let match: { automation: IAutomation; keyword?: string } | null = null;
-    if (message.replyToStoryId) {
+    const pickKeywordless = (list: IAutomation[]) => {
+      const anyReply = list.find((a) => a.keywords.length === 0);
+      return anyReply ? { automation: anyReply } : this.matchAutomation(list, message.text);
+    };
+
+    if (message.isStoryMention) {
+      // Someone mentioned the account in their story → thank-you DM.
+      const mentionAutomations = await automationRepository.findActiveDmAutomations(
+        account._id.toString(),
+        AutomationTrigger.STORY_MENTION
+      );
+      match = pickKeywordless(mentionAutomations);
+    } else if (message.replyToStoryId) {
+      // Reply to one of the account's stories (targeting via targetPostId).
       const storyAutomations = (
         await automationRepository.findActiveDmAutomations(
           account._id.toString(),
           AutomationTrigger.STORY
         )
       ).filter((a) => !a.targetPostId || a.targetPostId === message.replyToStoryId);
-      match =
-        storyAutomations.find((a) => a.keywords.length === 0) != null
-          ? { automation: storyAutomations.find((a) => a.keywords.length === 0)! }
-          : this.matchAutomation(storyAutomations, message.text);
+      match = pickKeywordless(storyAutomations);
+    } else {
+      // Ordinary DM → keyword automations only.
+      match = this.matchAutomation(
+        await automationRepository.findActiveDmAutomations(account._id.toString()),
+        message.text
+      );
     }
 
-    // Fall through to DM keyword automations.
-    if (!match) {
-      const automations = await automationRepository.findActiveDmAutomations(
-        account._id.toString()
-      );
-      match = this.matchAutomation(automations, message.text);
-    }
-    // Classic wins; otherwise give Studio DM/story automations a chance.
+    // Classic wins; otherwise give Studio automations of the same kind a chance.
     if (!match) {
       await studioEngineService.handleIncomingDm(account, message, conversationId);
       return;

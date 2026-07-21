@@ -77,5 +77,7 @@ export interface IncomingMessage {
   toId: string;
   /** Set when this DM is a reply to a story (the story's media id). */
   replyToStoryId?: string;
+  /** True when someone mentioned the account in their own story. */
+  isStoryMention?: boolean;
   createdTime?: Date;
 }

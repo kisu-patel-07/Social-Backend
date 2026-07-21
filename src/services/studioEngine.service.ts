@@ -98,7 +98,13 @@ class StudioEngineService {
    */
   async handleIncomingDm(
     account: ISocialAccount,
-    message: { fromId: string; text: string; replyToStoryId?: string; platform: Platform },
+    message: {
+      fromId: string;
+      text: string;
+      replyToStoryId?: string;
+      isStoryMention?: boolean;
+      platform: Platform;
+    },
     conversationId: Types.ObjectId
   ): Promise<boolean> {
     const studioEnabled = await featureService.isEnabled('studio', account.workspace.toString());
@@ -108,23 +114,31 @@ class StudioEngineService {
     );
     if (!entitlements.studio) return false;
 
-    const trigger = message.replyToStoryId ? AutomationTrigger.STORY : AutomationTrigger.DM;
+    const trigger = message.isStoryMention
+      ? AutomationTrigger.STORY_MENTION
+      : message.replyToStoryId
+        ? AutomationTrigger.STORY
+        : AutomationTrigger.DM;
     let candidates = await studioAutomationRepository.findActiveByTrigger(
       account._id.toString(),
       trigger
     );
     if (trigger === AutomationTrigger.STORY) {
-      // postScope/postIds double as story targeting for story triggers.
+      // postScope/postIds double as story targeting for story-reply triggers.
       candidates = candidates.filter(
-        (a) =>
-          a.postScope === StudioPostScope.ALL || a.postIds.includes(message.replyToStoryId!)
+        (a) => a.postScope === StudioPostScope.ALL || a.postIds.includes(message.replyToStoryId!)
       );
     }
 
     const haystack = message.text.toLowerCase();
     for (const automation of candidates) {
-      const result = this.matchText(automation, haystack);
-      if (!result.matched) continue;
+      // Story mentions carry no text, so they always match; others use keywords.
+      if (
+        trigger !== AutomationTrigger.STORY_MENTION &&
+        !this.matchText(automation, haystack).matched
+      ) {
+        continue;
+      }
       if (
         automation.oncePerUser &&
         (await this.alreadyMessaged(account, automation, message.fromId))

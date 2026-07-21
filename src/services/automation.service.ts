@@ -35,6 +35,7 @@ interface CreateAutomationParams {
 
 interface UpdateAutomationParams {
   name?: string;
+  triggerType?: AutomationTrigger;
   targetPostId?: string;
   keywords?: string[];
   matchType?: KeywordMatchType;
@@ -49,6 +50,12 @@ interface ListFilters extends PaginationOptions {
   socialAccountId?: string;
   search?: string;
 }
+
+/** Triggers that may run with no keywords (fire on every matching event). */
+const KEYWORD_OPTIONAL_TRIGGERS: AutomationTrigger[] = [
+  AutomationTrigger.STORY,
+  AutomationTrigger.STORY_MENTION,
+];
 
 class AutomationService {
   private normalizeKeywords(keywords: string[]): string[] {
@@ -129,8 +136,11 @@ class AutomationService {
     }
 
     const keywords = this.normalizeKeywords(params.keywords);
-    // Story automations may run keyword-less ("every story reply").
-    if (!keywords.length && params.triggerType !== AutomationTrigger.STORY) {
+    // Story replies / mentions may run keyword-less (fire on every event).
+    if (
+      !keywords.length &&
+      !KEYWORD_OPTIONAL_TRIGGERS.includes(params.triggerType ?? AutomationTrigger.COMMENT)
+    ) {
       throw new BadRequestError('At least one keyword is required');
     }
     await this.assertNoDuplicateKeywords(
@@ -195,24 +205,28 @@ class AutomationService {
 
   async update(user: AuthUser, id: string, params: UpdateAutomationParams): Promise<IAutomation> {
     const automation = await this.getById(user.workspaceId, id);
+    // The trigger the automation will have after this update.
+    const nextTrigger =
+      params.triggerType ?? automation.triggerType ?? AutomationTrigger.COMMENT;
 
     let keywords: string[] | undefined;
     if (params.keywords) {
       keywords = this.normalizeKeywords(params.keywords);
-      // Story automations may run keyword-less ("every story reply").
-      if (!keywords.length && automation.triggerType !== AutomationTrigger.STORY) {
+      // Story replies / mentions may run keyword-less (fire on every event).
+      if (!keywords.length && !KEYWORD_OPTIONAL_TRIGGERS.includes(nextTrigger)) {
         throw new BadRequestError('At least one keyword is required');
       }
       await this.assertNoDuplicateKeywords(
         automation.socialAccount.toString(),
         keywords,
-        automation.triggerType ?? AutomationTrigger.COMMENT,
+        nextTrigger,
         automation._id.toString()
       );
     }
 
     const updated = await automationRepository.updateById(id, {
       ...(params.name !== undefined ? { name: params.name } : {}),
+      ...(params.triggerType !== undefined ? { triggerType: params.triggerType } : {}),
       ...(params.targetPostId !== undefined ? { targetPostId: params.targetPostId } : {}),
       ...(params.publicReply !== undefined ? { publicReply: params.publicReply } : {}),
       ...(params.privateMessage !== undefined ? { privateMessage: params.privateMessage } : {}),
@@ -222,13 +236,14 @@ class AutomationService {
 
     if (!updated) throw new NotFoundError('Automation not found');
 
-    if (keywords) {
-      if ((updated.triggerType ?? AutomationTrigger.COMMENT) === AutomationTrigger.COMMENT) {
+    // Keyword docs power the comment pipeline only. Re-sync when comment
+    // keywords change; drop them if this is (now) a DM/story/mention automation.
+    if (nextTrigger === AutomationTrigger.COMMENT) {
+      if (keywords) {
         await this.syncKeywords(updated, keywords, params.matchType ?? KeywordMatchType.CONTAINS);
-      } else {
-        // Drop stale keyword docs so they can't block future comment automations.
-        await keywordRepository.deleteMany({ automation: updated._id });
       }
+    } else {
+      await keywordRepository.deleteMany({ automation: updated._id });
     }
 
     await Promise.all([

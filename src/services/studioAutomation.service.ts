@@ -57,6 +57,7 @@ class StudioAutomationService {
    * requires a coherent trigger + response setup on the merged document.
    */
   private assertReadyToActivate(doc: {
+    triggerType?: AutomationTrigger;
     keywordMode: StudioKeywordMode;
     keywords: string[];
     postScope: StudioPostScope;
@@ -64,7 +65,12 @@ class StudioAutomationService {
     publicReplyEnabled: boolean;
     publicReplies: string[];
   }): void {
-    if (doc.keywordMode !== StudioKeywordMode.ANY && !doc.keywords.length) {
+    // Story mentions carry no text — keyword matching does not apply.
+    if (
+      doc.triggerType !== AutomationTrigger.STORY_MENTION &&
+      doc.keywordMode !== StudioKeywordMode.ANY &&
+      !doc.keywords.length
+    ) {
       throw new BadRequestError(
         'Add at least one keyword (or set the trigger to "any comment") before going live'
       );
@@ -172,6 +178,7 @@ class StudioAutomationService {
     // never leaves a broken automation live.
     const merged = {
       status: params.status ?? existing.status,
+      triggerType: params.triggerType ?? existing.triggerType,
       postScope: params.postScope ?? existing.postScope,
       postIds: params.postIds ?? existing.postIds,
       keywordMode: params.keywordMode ?? existing.keywordMode,
@@ -188,6 +195,7 @@ class StudioAutomationService {
 
     const updated = await studioAutomationRepository.updateById(id, {
       ...(params.name !== undefined ? { name: params.name } : {}),
+      ...(params.triggerType !== undefined ? { triggerType: params.triggerType } : {}),
       ...(params.postScope !== undefined ? { postScope: params.postScope } : {}),
       ...(params.postIds !== undefined ? { postIds: params.postIds } : {}),
       ...(params.keywordMode !== undefined ? { keywordMode: params.keywordMode } : {}),

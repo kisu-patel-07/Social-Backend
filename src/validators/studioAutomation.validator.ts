@@ -21,6 +21,7 @@ const repliesSchema = z
 /** Cross-field rules shared by create and update payloads. */
 function assertStudioRules(
   data: {
+    triggerType?: string;
     postScope?: StudioPostScope;
     postIds?: string[];
     keywordMode?: StudioKeywordMode;
@@ -39,7 +40,13 @@ function assertStudioRules(
       message: 'Pick at least one post, or switch to "All posts"',
     });
   }
-  if (data.keywordMode !== StudioKeywordMode.ANY && data.keywords && !data.keywords.length) {
+  // Story mentions carry no text — keyword matching does not apply.
+  if (
+    data.triggerType !== 'story_mention' &&
+    data.keywordMode !== StudioKeywordMode.ANY &&
+    data.keywords &&
+    !data.keywords.length
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['keywords'],
@@ -68,7 +75,7 @@ const createBodySchema = z
     name: z.string().trim().min(1).max(120),
     socialAccountId: objectIdSchema,
     platform: z.nativeEnum(Platform),
-    triggerType: z.enum(['comment', 'dm', 'story']).default('comment'),
+    triggerType: z.enum(['comment', 'dm', 'story', 'story_mention']).default('comment'),
     postScope: z.nativeEnum(StudioPostScope).default(StudioPostScope.ALL),
     postIds: z.array(z.string().trim().min(1).max(200)).max(10).default([]),
     keywordMode: z.nativeEnum(StudioKeywordMode).default(StudioKeywordMode.CONTAINS),
@@ -89,6 +96,7 @@ export const createStudioAutomationSchema = z.object({ body: createBodySchema })
 const updateBodySchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
+    triggerType: z.enum(['comment', 'dm', 'story', 'story_mention']).optional(),
     postScope: z.nativeEnum(StudioPostScope).optional(),
     postIds: z.array(z.string().trim().min(1).max(200)).max(10).optional(),
     keywordMode: z.nativeEnum(StudioKeywordMode).optional(),
