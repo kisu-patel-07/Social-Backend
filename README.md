@@ -1,4 +1,4 @@
-# Social Automation — Backend
+# SocialDM — Backend
 
 Production-ready backend for a comment-to-DM automation SaaS (Instagram Business + Facebook Pages) built on the official Meta Graph API.
 

@@ -23,7 +23,7 @@ const prodFormat = combine(timestamp(), errors({ stack: true }), json());
 export const logger = winston.createLogger({
   level: env.LOG_LEVEL,
   format: isProduction ? prodFormat : devFormat,
-  defaultMeta: { service: 'social-automation-backend' },
+  defaultMeta: { service: 'socialdm-backend' },
   transports: [new winston.transports.Console()],
   exitOnError: false,
 });

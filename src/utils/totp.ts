@@ -4,7 +4,7 @@ import QRCode from 'qrcode';
 /** Tolerate one 30s step of clock drift between server and authenticator app. */
 authenticator.options = { window: 1 };
 
-const ISSUER = 'SocialFlow';
+const ISSUER = 'SocialDM';
 
 export function generateTotpSecret(): string {
   return authenticator.generateSecret();

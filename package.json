@@ -1,5 +1,5 @@
 {
-  "name": "social-automation-backend",
+  "name": "socialdm-backend",
   "version": "1.0.0",
   "description": "Backend for Social Media Automation SaaS (comment-to-DM automation, leads, inbox, analytics)",
   "main": "dist/server.js",

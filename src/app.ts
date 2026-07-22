@@ -52,7 +52,7 @@ export function createApp(): Application {
 
   // Liveness probe at the root.
   app.get('/', (_req: Request, res: Response) => {
-    res.json({ success: true, message: 'Social Automation API', data: { version: '1.0.0' } });
+    res.json({ success: true, message: 'SocialDM API', data: { version: '1.0.0' } });
   });
 
   app.use(env.API_PREFIX, apiLimiter, routes);
