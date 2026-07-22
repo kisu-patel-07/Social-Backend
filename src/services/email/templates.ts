@@ -109,6 +109,33 @@ export const emailTemplates = {
       text: message,
     };
   },
+
+  demoRequestReceived(name: string, topicLabel: string, preferred?: string): EmailContent {
+    const preferredLine = preferred ? `<p>You asked for: <strong>${preferred}</strong>.</p>` : '';
+    return {
+      subject: `We got your request — ${topicLabel} 📅`,
+      html: layout(
+        `Hi ${name},`,
+        `<p>Thanks for booking a <strong>${topicLabel.toLowerCase()}</strong> with ${env.BREVO_SENDER_NAME}!</p>
+         ${preferredLine}
+         <p>A real human will email you within 24 hours (Mon–Sat, IST) to confirm the exact time.</p>`
+      ),
+      text: `Hi ${name}, we received your ${topicLabel.toLowerCase()} request${preferred ? ` (preferred: ${preferred})` : ''}. We'll confirm the exact time within 24 hours (Mon–Sat, IST).`,
+    };
+  },
+
+  demoCallScheduled(name: string, whenText: string, topicLabel: string): EmailContent {
+    return {
+      subject: `Your call is confirmed: ${whenText} ✅`,
+      html: layout(
+        `Hi ${name},`,
+        `<p>Your <strong>${topicLabel.toLowerCase()}</strong> with ${env.BREVO_SENDER_NAME} is confirmed for:</p>
+         <p style="font-size:20px;font-weight:700;text-align:center;background:#f1f5f9;border-radius:12px;padding:16px 8px;margin:16px 0;">${whenText}</p>
+         <p>We'll send the meeting link to this email address before the call. Need to change the time? Just reply to this email.</p>`
+      ),
+      text: `Hi ${name}, your ${topicLabel.toLowerCase()} is confirmed for ${whenText}. We'll send the meeting link before the call. Reply to this email to reschedule.`,
+    };
+  },
 };
 
 export type { EmailContent };

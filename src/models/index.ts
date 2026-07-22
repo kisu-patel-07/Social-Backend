@@ -9,6 +9,7 @@ export { MessageModel, IMessage } from './message.model';
 export { LeadModel, ILead } from './lead.model';
 export { AnalyticsDailyModel, IAnalyticsDaily } from './analytics.model';
 export { LinkClickModel, ILinkClick } from './linkClick.model';
+export { DemoRequestModel, IDemoRequest } from './demoRequest.model';
 export { NotificationModel, INotification } from './notification.model';
 export { ActivityLogModel, IActivityLog } from './activityLog.model';
 export { FeatureFlagModel, IFeatureFlag, FeatureFlagMode } from './featureFlag.model';

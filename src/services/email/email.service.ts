@@ -47,6 +47,26 @@ class EmailService {
     const c = emailTemplates.subscription(name, message);
     return brevoClient.send({ to: { email: to, name }, ...c });
   }
+
+  sendDemoRequestReceived(
+    to: string,
+    name: string,
+    topicLabel: string,
+    preferred?: string
+  ): Promise<void> {
+    const c = emailTemplates.demoRequestReceived(name, topicLabel, preferred);
+    return brevoClient.send({ to: { email: to, name }, ...c });
+  }
+
+  sendDemoCallScheduled(
+    to: string,
+    name: string,
+    whenText: string,
+    topicLabel: string
+  ): Promise<void> {
+    const c = emailTemplates.demoCallScheduled(name, whenText, topicLabel);
+    return brevoClient.send({ to: { email: to, name }, ...c });
+  }
 }
 
 export const emailService = new EmailService();

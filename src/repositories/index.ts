@@ -12,6 +12,7 @@ export { analyticsRepository } from './analytics.repository';
 export { notificationRepository } from './notification.repository';
 export { activityLogRepository } from './activityLog.repository';
 export { featureFlagRepository } from './featureFlag.repository';
+export { demoRequestRepository } from './demoRequest.repository';
 export {
   planRepository,
   subscriptionRepository,

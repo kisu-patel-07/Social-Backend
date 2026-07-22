@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { BillingInterval, PaymentStatus, SubscriptionStatus } from '../constants';
+import {
+  BillingInterval,
+  DemoRequestStatus,
+  PaymentStatus,
+  SubscriptionStatus,
+} from '../constants';
 import { idParamSchema, objectIdSchema, paginationQuerySchema } from './common.validator';
 
 /** GET /admin/users query. */
@@ -147,6 +152,27 @@ export const adminUpdateFeatureSchema = z.object({
     description: z.string().trim().max(300).optional(),
     workspaces: z.array(objectIdSchema).max(200).optional(),
   }),
+});
+
+/** GET /admin/demo-requests query. */
+export const adminListDemoRequestsSchema = z.object({
+  query: paginationQuerySchema.extend({
+    status: z.nativeEnum(DemoRequestStatus).optional(),
+  }),
+});
+
+/** PATCH /admin/demo-requests/:id */
+export const adminUpdateDemoRequestSchema = z.object({
+  params: idParamSchema,
+  body: z
+    .object({
+      status: z.nativeEnum(DemoRequestStatus).optional(),
+      scheduledAt: z.string().datetime({ offset: true }).or(z.literal('')).optional(),
+      adminNote: z.string().trim().max(2000).optional(),
+    })
+    .refine((b) => b.status || b.scheduledAt !== undefined || b.adminNote !== undefined, {
+      message: 'Provide at least one of status, scheduledAt or adminNote',
+    }),
 });
 
 /** GET /admin/workspaces query (allowlist picker). */

@@ -12,6 +12,7 @@ import subscriptionRoutes from './subscription.routes';
 import webhookRoutes from './webhook.routes';
 import adminRoutes from './admin.routes';
 import contactRoutes from './contact.routes';
+import demoRequestRoutes from './demoRequest.routes';
 import giveawayRoutes from './giveaway.routes';
 import { linkTrackingService } from '../services/linkTracking.service';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -36,6 +37,7 @@ router.use('/subscriptions', subscriptionRoutes);
 router.use('/webhooks', webhookRoutes);
 router.use('/admin', adminRoutes);
 router.use('/contact', contactRoutes);
+router.use('/demo-requests', demoRequestRoutes);
 router.use('/giveaway', giveawayRoutes);
 
 // Public tracked-link redirect — clicked from users' DMs, so no auth.

@@ -188,6 +188,20 @@ export enum TokenType {
   PASSWORD_RESET = 'password_reset',
 }
 
+/** What a demo-call enquiry is about. */
+export enum DemoRequestTopic {
+  DEMO = 'demo',
+  SETUP = 'setup',
+  BOTH = 'both',
+}
+
+export enum DemoRequestStatus {
+  PENDING = 'pending',
+  SCHEDULED = 'scheduled',
+  COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+}
+
 /**
  * Meta's standard messaging window: free-form DMs are only allowed within
  * 24 hours of the contact's last inbound message (both IG and Messenger).

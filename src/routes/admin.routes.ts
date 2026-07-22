@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { adminController } from '../controllers/admin.controller';
+import { demoRequestController } from '../controllers/demoRequest.controller';
 import { authenticate, requireSuperAdmin } from '../middlewares';
 import { validate } from '../middlewares/validate.middleware';
 import {
@@ -10,6 +11,8 @@ import {
   adminCreatePlanSchema,
   adminGrantBonusSchema,
   adminListActivitySchema,
+  adminListDemoRequestsSchema,
+  adminUpdateDemoRequestSchema,
   adminListAutomationsSchema,
   adminListPaymentsSchema,
   adminListSubscriptionsSchema,
@@ -108,6 +111,18 @@ router.patch(
   '/payments/:id/refund',
   validate(z.object({ params: idParamSchema })),
   adminController.refundPayment
+);
+
+// Demo-call requests (public form -> admin follow-up)
+router.get(
+  '/demo-requests',
+  validate(adminListDemoRequestsSchema),
+  demoRequestController.adminList
+);
+router.patch(
+  '/demo-requests/:id',
+  validate(adminUpdateDemoRequestSchema),
+  demoRequestController.adminUpdate
 );
 
 // Feature flags + workspace search for the allowlist picker
