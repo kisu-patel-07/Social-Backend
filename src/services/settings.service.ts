@@ -25,6 +25,14 @@ interface ProfileUpdate {
 interface WorkspaceUpdate {
   name?: string;
   timezone?: string;
+  aiAssistant?: {
+    enabled?: boolean;
+    businessContext?: string;
+    dailyLimit?: number;
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+  };
 }
 
 interface NotificationPrefs {
@@ -53,7 +61,21 @@ class SettingsService {
   }
 
   async updateWorkspace(workspaceId: string, update: WorkspaceUpdate): Promise<IWorkspace> {
-    const workspace = await workspaceRepository.updateById(workspaceId, update);
+    // Flatten the AI subdocument into dot-paths so a partial update (e.g. just
+    // toggling `enabled`) never wipes the other fields.
+    const { aiAssistant, ...rest } = update;
+    const set: Record<string, unknown> = { ...rest };
+    if (aiAssistant) {
+      if (aiAssistant.enabled !== undefined) set['aiAssistant.enabled'] = aiAssistant.enabled;
+      if (aiAssistant.businessContext !== undefined)
+        set['aiAssistant.businessContext'] = aiAssistant.businessContext;
+      if (aiAssistant.dailyLimit !== undefined)
+        set['aiAssistant.dailyLimit'] = aiAssistant.dailyLimit;
+      if (aiAssistant.apiKey !== undefined) set['aiAssistant.apiKey'] = aiAssistant.apiKey;
+      if (aiAssistant.baseUrl !== undefined) set['aiAssistant.baseUrl'] = aiAssistant.baseUrl;
+      if (aiAssistant.model !== undefined) set['aiAssistant.model'] = aiAssistant.model;
+    }
+    const workspace = await workspaceRepository.updateById(workspaceId, set);
     if (!workspace) throw new NotFoundError('Workspace not found');
     return workspace;
   }

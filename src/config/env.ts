@@ -53,6 +53,16 @@ const envSchema = z.object({
   /** Public base of this API — used to build tracked short links (/r/:slug). */
   PUBLIC_API_URL: z.string().default('http://localhost:5000/api/v1'),
 
+  /**
+   * AI auto-reply (free-tier friendly). Any OpenAI-compatible chat endpoint
+   * works; defaults target Google Gemini's free tier. Leave AI_API_KEY empty
+   * to disable the feature globally. Swap to Groq with
+   * AI_BASE_URL=https://api.groq.com/openai/v1 and AI_MODEL=llama-3.3-70b-versatile.
+   */
+  AI_API_KEY: z.string().default(''),
+  AI_BASE_URL: z.string().default('https://generativelanguage.googleapis.com/v1beta/openai'),
+  AI_MODEL: z.string().default('gemini-2.0-flash'),
+
   /** Shared secret for scheduled-job endpoints (Vercel Cron sends it as a Bearer token). */
   CRON_SECRET: z.string().default(''),
 

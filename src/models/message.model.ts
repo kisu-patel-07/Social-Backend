@@ -24,6 +24,8 @@ export interface IMessage extends Document {
   automation?: Types.ObjectId;
   /** Whether this message was produced by automation vs. a human agent. */
   isAutomated: boolean;
+  /** True when the text was written by the AI assistant (unmatched-DM fallback). */
+  aiGenerated?: boolean;
   error?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -55,6 +57,7 @@ const messageSchema = new Schema<IMessage>(
     postId: { type: String },
     automation: { type: Schema.Types.ObjectId, ref: 'Automation' },
     isAutomated: { type: Boolean, default: false },
+    aiGenerated: { type: Boolean, default: false },
     error: { type: String },
   },
   { timestamps: true }

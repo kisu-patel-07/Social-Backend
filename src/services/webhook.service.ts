@@ -24,9 +24,13 @@ import {
   messageRepository,
   socialAccountRepository,
   userRepository,
+  workspaceRepository,
 } from '../repositories';
+import { startOfDay } from '../utils/date';
 import { activityService } from './activity.service';
+import { aiReplyService } from './aiReply.service';
 import { analyticsService } from './analytics.service';
+import { featureService } from './feature.service';
 import { emailService } from './email/email.service';
 import { IncomingComment, IncomingMessage, metaClient, parseWebhookPayload } from './meta';
 import { notificationService } from './notification.service';
@@ -554,7 +558,15 @@ class WebhookService {
 
     // Classic wins; otherwise give Studio automations of the same kind a chance.
     if (!match) {
-      await studioEngineService.handleIncomingDm(account, message, conversationId);
+      const handledByStudio = await studioEngineService.handleIncomingDm(
+        account,
+        message,
+        conversationId
+      );
+      // Last resort: the AI assistant answers plain DMs nothing else matched.
+      if (!handledByStudio && !message.isStoryMention && !message.replyToStoryId) {
+        await this.runAiFallback(account, message, conversationId);
+      }
       return;
     }
 
@@ -621,6 +633,93 @@ class WebhookService {
     } catch (error) {
       logger.error('DM automation reply FAILED', {
         automation: automation.name,
+        error: (error as Error).message,
+      });
+      await messageRepository.updateById(dm._id, {
+        status: MessageStatus.FAILED,
+        error: (error as Error).message,
+      });
+    }
+  }
+
+  /**
+   * AI assistant fallback: answers a plain DM that no classic or Studio
+   * automation matched, grounded in the workspace's business context. Gated
+   * by: global AI config, workspace toggle, subscription access, and a
+   * per-day cap (protects free-tier LLM quotas). Best-effort — any failure
+   * leaves the DM for a human in the inbox.
+   */
+  private async runAiFallback(
+    account: ISocialAccount,
+    message: IncomingMessage,
+    conversationId: Types.ObjectId
+  ): Promise<void> {
+    if (!account.pageId || !message.text.trim()) return;
+
+    const workspaceId = account.workspace.toString();
+    const workspace = await workspaceRepository.findById(workspaceId);
+    const ai = workspace?.aiAssistant;
+    if (!ai?.enabled || !ai.businessContext.trim()) return;
+
+    // Needs a key from somewhere: the workspace's own (BYOK) or the platform's.
+    if (!ai.apiKey && !aiReplyService.isConfigured()) return;
+
+    // Admin kill switch / allowlist (Admin -> Features -> "AI assistant").
+    if (!(await featureService.isEnabled('ai', workspaceId))) {
+      logger.info('AI reply skipped: feature disabled by admin', { workspace: workspaceId });
+      return;
+    }
+
+    const access = await subscriptionService.getAccessState(workspaceId);
+    if (!access.allowed) return;
+
+    // Daily cap across the workspace, cheap thanks to the aiGenerated flag.
+    const sentToday = await messageRepository.count({
+      workspace: account.workspace,
+      aiGenerated: true,
+      createdAt: { $gte: startOfDay(new Date()) },
+    });
+    if (sentToday >= (ai.dailyLimit || 50)) {
+      logger.info('AI reply skipped: daily limit reached', {
+        workspace: workspaceId,
+        limit: ai.dailyLimit,
+      });
+      return;
+    }
+
+    const replyText = await aiReplyService.generateReply(ai.businessContext, message.text, {
+      apiKey: ai.apiKey || undefined,
+      baseUrl: ai.baseUrl || undefined,
+      model: ai.model || undefined,
+    });
+    if (!replyText) return;
+
+    const dm = await messageRepository.create({
+      workspace: account.workspace,
+      socialAccount: account._id,
+      conversation: conversationId,
+      platform: message.platform,
+      direction: MessageDirection.OUTBOUND,
+      type: MessageType.DIRECT_MESSAGE,
+      status: MessageStatus.PENDING,
+      toId: message.fromId,
+      text: replyText,
+      isAutomated: true,
+      aiGenerated: true,
+    });
+    try {
+      await metaClient.sendDirectMessage(
+        account.pageId,
+        message.fromId,
+        replyText,
+        account.accessToken
+      );
+      await messageRepository.updateById(dm._id, { status: MessageStatus.SENT });
+      await analyticsService.track(workspaceId, 'dmSent', message.platform);
+      logger.info('AI assistant replied to DM', { workspace: workspaceId, toId: message.fromId });
+    } catch (error) {
+      logger.error('AI assistant reply FAILED', {
+        toId: message.fromId,
         error: (error as Error).message,
       });
       await messageRepository.updateById(dm._id, {

@@ -16,6 +16,13 @@ const KNOWN_FLAGS: Array<Pick<IFeatureFlag, 'key' | 'name' | 'description' | 'mo
     description: 'The v2 automation builder (Studio tab). Kill switch + gradual rollout.',
     mode: 'on', // Studio predates flags — default on so nobody loses access.
   },
+  {
+    key: 'ai',
+    name: 'AI assistant',
+    description:
+      'AI auto-replies to DMs no automation matched. Off = nobody; allowlist = selected workspaces only.',
+    mode: 'on',
+  },
 ];
 
 class FeatureService {

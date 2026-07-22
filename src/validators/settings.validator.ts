@@ -12,6 +12,17 @@ export const updateWorkspaceSchema = z.object({
   body: z.object({
     name: z.string().trim().min(1).max(120).optional(),
     timezone: z.string().trim().max(60).optional(),
+    aiAssistant: z
+      .object({
+        enabled: z.boolean().optional(),
+        businessContext: z.string().trim().max(4000).optional(),
+        dailyLimit: z.coerce.number().int().min(1).max(1000).optional(),
+        // BYOK: empty string clears the field (falls back to platform default).
+        apiKey: z.string().trim().max(300).optional(),
+        baseUrl: z.string().trim().url().max(300).or(z.literal('')).optional(),
+        model: z.string().trim().max(120).optional(),
+      })
+      .optional(),
   }),
 });
 
