@@ -11,6 +11,8 @@ router.use(authenticate);
 
 router.get('/dashboard', analyticsController.dashboard);
 router.get('/overview', analyticsController.overview);
+// Per-automation funnel: triggered -> DM sent -> link clicked -> lead captured.
+router.get('/funnels', analyticsController.funnels);
 // Click totals from tracked DM links, grouped per automation.
 router.get(
   '/clicks',

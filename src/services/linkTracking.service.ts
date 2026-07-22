@@ -3,6 +3,7 @@ import { Types } from 'mongoose';
 import { env } from '../config/env';
 import { logger } from '../config/logger';
 import { ITrackedLink, TrackedLinkModel } from '../models/trackedLink.model';
+import { LinkClickModel } from '../models/linkClick.model';
 
 const URL_REGEX = /https?:\/\/[^\s<>"')]+/g;
 const SLUG_ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -84,7 +85,63 @@ class LinkTrackingService {
       { slug },
       { $inc: { clicks: 1 }, $set: { lastClickedAt: new Date() } }
     ).exec();
-    return link?.originalUrl ?? null;
+    if (!link) return null;
+
+    // Event log powers date-ranged funnel stats. Fail open: the redirect must
+    // never break because analytics couldn't be written.
+    try {
+      await LinkClickModel.create({
+        workspace: link.workspace,
+        trackedLink: link._id,
+        automation: link.automation,
+        studioAutomation: link.studioAutomation,
+      });
+    } catch (error) {
+      logger.warn('Link click event log failed', { slug, error: (error as Error).message });
+    }
+    return link.originalUrl;
+  }
+
+  /** Clicks per automation within a date range (from the click event log). */
+  async clickCountsBetween(
+    workspaceId: string,
+    start: Date,
+    end: Date
+  ): Promise<{
+    byAutomation: Record<string, number>;
+    byStudioAutomation: Record<string, number>;
+  }> {
+    const rows = await LinkClickModel.aggregate<{
+      _id: { automation?: Types.ObjectId; studioAutomation?: Types.ObjectId };
+      clicks: number;
+    }>([
+      {
+        $match: {
+          workspace: new Types.ObjectId(workspaceId),
+          createdAt: { $gte: start, $lte: end },
+        },
+      },
+      {
+        $group: {
+          _id: { automation: '$automation', studioAutomation: '$studioAutomation' },
+          clicks: { $sum: 1 },
+        },
+      },
+    ]).exec();
+
+    const byAutomation: Record<string, number> = {};
+    const byStudioAutomation: Record<string, number> = {};
+    for (const row of rows) {
+      if (row._id.automation) {
+        const id = row._id.automation.toString();
+        byAutomation[id] = (byAutomation[id] ?? 0) + row.clicks;
+      }
+      if (row._id.studioAutomation) {
+        const id = row._id.studioAutomation.toString();
+        byStudioAutomation[id] = (byStudioAutomation[id] ?? 0) + row.clicks;
+      }
+    }
+    return { byAutomation, byStudioAutomation };
   }
 
   /** Click totals for a workspace, grouped per automation. */

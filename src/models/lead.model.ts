@@ -26,6 +26,8 @@ export interface ILead extends Document {
   conversation?: Types.ObjectId;
   /** Automation that generated this lead. */
   automation?: Types.ObjectId;
+  /** Studio automation that generated this lead (mutually exclusive with automation). */
+  studioAutomation?: Types.ObjectId;
   /** Keyword that matched. */
   matchedKeyword?: string;
   status: LeadStatus;
@@ -60,6 +62,7 @@ const leadSchema = new Schema<ILead>(
     comment: { type: String, maxlength: 2000 },
     conversation: { type: Schema.Types.ObjectId, ref: 'Conversation' },
     automation: { type: Schema.Types.ObjectId, ref: 'Automation' },
+    studioAutomation: { type: Schema.Types.ObjectId, ref: 'StudioAutomation' },
     matchedKeyword: { type: String },
     status: {
       type: String,

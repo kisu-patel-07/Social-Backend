@@ -407,6 +407,7 @@ class StudioEngineService {
           postId: comment.postId,
           comment: comment.text,
           conversation: conversation._id,
+          studioAutomation: automation._id,
           matchedKeyword: keyword,
           status: LeadStatus.NEW,
         });
