@@ -114,6 +114,24 @@ class StudioEngineService {
     );
     if (!entitlements.studio) return false;
 
+    // Same billing gates as the comment pipeline (which is gated upstream in
+    // webhook.handleComment — this DM entry point has no such upstream gate).
+    const access = await subscriptionService.getAccessState(account.workspace.toString());
+    if (!access.allowed) {
+      logger.info('Studio DM automation skipped: subscription inactive', {
+        workspace: account.workspace.toString(),
+      });
+      return false;
+    }
+    const quota = await subscriptionService.getMessageQuota(account.workspace.toString());
+    if (quota.exceeded) {
+      logger.info('Studio DM automation skipped: monthly reply limit reached', {
+        workspace: account.workspace.toString(),
+        limit: quota.limit,
+      });
+      return false;
+    }
+
     const trigger = message.isStoryMention
       ? AutomationTrigger.STORY_MENTION
       : message.replyToStoryId

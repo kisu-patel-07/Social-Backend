@@ -91,6 +91,7 @@ class AuthService {
       workspaceId: user.workspace.toString(),
       role: user.role,
       email: user.email,
+      tv: user.tokenVersion ?? 0,
     };
     return {
       accessToken: signAccessToken(payload),

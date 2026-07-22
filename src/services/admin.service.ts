@@ -1042,6 +1042,7 @@ class AdminService {
       email: user.email,
       imp: true,
       actor: actor.id,
+      tv: user.tokenVersion ?? 0,
     });
 
     await activityService.log({

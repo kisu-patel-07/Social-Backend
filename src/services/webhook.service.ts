@@ -163,24 +163,14 @@ class WebhookService {
     }
 
     // Plan volume gate: stop automated replies once the monthly quota is spent.
-    const { limits } = await subscriptionService.getEntitlements(account.workspace.toString());
-    if (limits.monthlyMessages !== -1) {
-      const startOfMonth = new Date();
-      startOfMonth.setDate(1);
-      startOfMonth.setHours(0, 0, 0, 0);
-      const sentThisMonth = await messageRepository.count({
-        workspace: account.workspace,
-        direction: MessageDirection.OUTBOUND,
-        createdAt: { $gte: startOfMonth },
+    const quota = await subscriptionService.getMessageQuota(account.workspace.toString());
+    if (quota.exceeded) {
+      logger.info('Automation skipped: monthly reply limit reached', {
+        workspace: account.workspace.toString(),
+        limit: quota.limit,
+        commentId: comment.commentId,
       });
-      if (sentThisMonth >= limits.monthlyMessages) {
-        logger.info('Automation skipped: monthly reply limit reached', {
-          workspace: account.workspace.toString(),
-          limit: limits.monthlyMessages,
-          commentId: comment.commentId,
-        });
-        return;
-      }
+      return;
     }
 
     const automations = await automationRepository.findActiveMatching(
@@ -578,22 +568,13 @@ class WebhookService {
       });
       return;
     }
-    const { limits } = await subscriptionService.getEntitlements(account.workspace.toString());
-    if (limits.monthlyMessages !== -1) {
-      const startOfMonth = new Date();
-      startOfMonth.setDate(1);
-      startOfMonth.setHours(0, 0, 0, 0);
-      const sentThisMonth = await messageRepository.count({
-        workspace: account.workspace,
-        direction: MessageDirection.OUTBOUND,
-        createdAt: { $gte: startOfMonth },
+    const dmQuota = await subscriptionService.getMessageQuota(account.workspace.toString());
+    if (dmQuota.exceeded) {
+      logger.info('DM automation skipped: monthly reply limit reached', {
+        workspace: account.workspace.toString(),
+        limit: dmQuota.limit,
       });
-      if (sentThisMonth >= limits.monthlyMessages) {
-        logger.info('DM automation skipped: monthly reply limit reached', {
-          workspace: account.workspace.toString(),
-        });
-        return;
-      }
+      return;
     }
 
     const { automation, keyword } = match;
@@ -672,6 +653,13 @@ class WebhookService {
 
     const access = await subscriptionService.getAccessState(workspaceId);
     if (!access.allowed) return;
+
+    // AI replies are outbound messages too — they respect the plan quota.
+    const aiQuota = await subscriptionService.getMessageQuota(workspaceId);
+    if (aiQuota.exceeded) {
+      logger.info('AI reply skipped: monthly reply limit reached', { workspace: workspaceId });
+      return;
+    }
 
     // Daily cap across the workspace, cheap thanks to the aiGenerated flag.
     const sentToday = await messageRepository.count({

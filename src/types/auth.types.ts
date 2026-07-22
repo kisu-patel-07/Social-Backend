@@ -10,6 +10,12 @@ export interface JwtPayload {
   imp?: boolean;
   /** The impersonating admin's user id (audit trail). */
   actor?: string;
+  /**
+   * The user's tokenVersion at issue time. Bumped on suspension (and any
+   * future "log out everywhere") so outstanding tokens die immediately.
+   * Optional so tokens issued before this field shipped stay valid.
+   */
+  tv?: number;
 }
 
 /** The authenticated principal attached to req.user after auth middleware. */

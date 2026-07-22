@@ -20,6 +20,7 @@ import { PaginatedResult, PaginationOptions } from '../types/common.types';
 import { BadRequestError, NotFoundError } from '../utils/AppError';
 import { activityService } from './activity.service';
 import { metaClient } from './meta';
+import { subscriptionService } from './subscription.service';
 
 interface ConversationFilters extends PaginationOptions {
   platform?: Platform;
@@ -112,6 +113,7 @@ class InboxService {
 
   /** Send a manual reply from an agent in a conversation. */
   async reply(user: AuthUser, conversationId: string, text: string): Promise<IMessage> {
+    await subscriptionService.assertCanSendManualReply(user.workspaceId);
     const conversation = await this.getConversation(user.workspaceId, conversationId);
 
     const account = await socialAccountRepository.findWithToken(
@@ -191,6 +193,7 @@ class InboxService {
 
   /** Send a manual public reply to an inbound comment from the Comments feed. */
   async replyToComment(user: AuthUser, messageId: string, text: string): Promise<IMessage> {
+    await subscriptionService.assertCanSendManualReply(user.workspaceId);
     const comment = await messageRepository.findOne({
       _id: messageId,
       workspace: user.workspaceId,

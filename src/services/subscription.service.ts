@@ -4,6 +4,7 @@ import {
   ActivityAction,
   BillingInterval,
   InvoiceStatus,
+  MessageDirection,
   NotificationType,
   PaymentStatus,
   SubscriptionStatus,
@@ -14,6 +15,7 @@ import { ISubscription } from '../models/subscription.model';
 import { IInvoice } from '../models/invoice.model';
 import {
   invoiceRepository,
+  messageRepository,
   notificationRepository,
   paymentRepository,
   planRepository,
@@ -226,6 +228,51 @@ class SubscriptionService {
         csvExport: plan.entitlements?.csvExport ?? true,
       },
     };
+  }
+
+  /**
+   * Outbound message usage for the current calendar month vs the plan limit.
+   * The single source of truth for the reply quota — used by the automation
+   * engines (skip + log) and manual inbox replies (403) alike.
+   */
+  async getMessageQuota(
+    workspaceId: string
+  ): Promise<{ sent: number; limit: number; exceeded: boolean }> {
+    const { limits } = await this.getEntitlements(workspaceId);
+    if (limits.monthlyMessages === -1) return { sent: 0, limit: -1, exceeded: false };
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    const sent = await messageRepository.count({
+      workspace: workspaceId,
+      direction: MessageDirection.OUTBOUND,
+      createdAt: { $gte: startOfMonth },
+    });
+    return { sent, limit: limits.monthlyMessages, exceeded: sent >= limits.monthlyMessages };
+  }
+
+  /**
+   * Gate for manual replies (inbox DMs + comment replies): the subscription
+   * must be usable and the monthly reply quota not yet spent. Throws the same
+   * error codes the rest of the platform uses so the client can react uniformly.
+   */
+  async assertCanSendManualReply(workspaceId: string): Promise<void> {
+    const access = await this.getAccessState(workspaceId);
+    if (!access.allowed) {
+      throw new AppError(
+        'Your subscription is inactive. Choose a plan from Billing to keep replying.',
+        HttpStatus.FORBIDDEN,
+        { errorCode: 'SUBSCRIPTION_EXPIRED' }
+      );
+    }
+    const quota = await this.getMessageQuota(workspaceId);
+    if (quota.exceeded) {
+      throw new AppError(
+        `You've used all ${quota.limit} replies included in your plan this month. Upgrade your plan to keep replying.`,
+        HttpStatus.FORBIDDEN,
+        { errorCode: 'PLAN_LIMIT_REACHED' }
+      );
+    }
   }
 
   /**
