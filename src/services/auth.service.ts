@@ -280,6 +280,13 @@ class AuthService {
     }
     // Suspension takes effect as soon as the current access token expires.
     if (user.isSuspended) throw accountSuspendedError();
+    // A refresh token minted before a tokenVersion bump (password reset,
+    // suspension, "log out everywhere") is dead. Without this, a stolen refresh
+    // token survives a password reset for its full lifetime — the access-token
+    // middleware checks tv, but the refresh path did not.
+    if (payload.tv !== undefined && payload.tv !== (user.tokenVersion ?? 0)) {
+      throw new UnauthorizedError('Session revoked — please sign in again');
+    }
     // Sessions issued before this policy shipped must also verify.
     if (!user.isEmailVerified) throw emailNotVerifiedError();
     return this.issueTokens(user);

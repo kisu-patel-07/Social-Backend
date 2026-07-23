@@ -68,36 +68,59 @@ class MetaService {
   }
 
   /**
-   * Refresh tokens that are within the refresh threshold of expiring.
-   * Intended to be invoked by a scheduled job (cron) — implemented without
-   * Redis/queues per the MVP constraints.
+   * Validate stored tokens that our records say are nearing expiry, and record
+   * their real state. Intended to be invoked by a scheduled job (cron).
+   *
+   * Note on the token model: we store Page access tokens derived from a
+   * long-lived user token, and those generally DO NOT expire (debug_token
+   * reports expires_at = 0). So this job cannot "refresh" a Page token by
+   * re-exchanging it — fb_exchange_token requires a *user* token and would fail
+   * on every account. Instead it inspects each token with debug_token and:
+   *  - clears the stale `tokenExpiresAt` countdown to the real expiry (or a
+   *    fresh horizon for non-expiring tokens), so healthy accounts stop
+   *    re-entering this window every night;
+   *  - flags genuinely invalid/revoked tokens with `lastError` so the UI can
+   *    prompt the user to reconnect.
    */
-  async refreshExpiringTokens(): Promise<{ checked: number; refreshed: number }> {
+  async refreshExpiringTokens(): Promise<{ checked: number; healthy: number; invalid: number }> {
     const threshold = addDays(new Date(), TOKEN_REFRESH_THRESHOLD_DAYS);
     const accounts = await socialAccountRepository.findExpiringTokens(threshold);
-    let refreshed = 0;
+    let healthy = 0;
+    let invalid = 0;
 
     for (const account of accounts) {
       try {
-        const longLived = await metaClient.getLongLivedToken(account.accessToken);
+        const info = await metaClient.debugToken(account.accessToken);
+        if (!info.is_valid) {
+          invalid += 1;
+          await socialAccountRepository.updateById(account.id, {
+            $set: { lastError: 'Connection expired — please reconnect this account.' },
+          });
+          continue;
+        }
+        // expires_at = 0 means the Page token does not expire (normal for
+        // tokens derived from a long-lived user token). Record the real expiry
+        // (or a fresh horizon) and clear any stale error via $unset — a plain
+        // `lastError: undefined` is stripped by Mongoose and never clears it.
+        const tokenExpiresAt =
+          info.expires_at > 0 ? new Date(info.expires_at * 1000) : this.computeTokenExpiry();
         await socialAccountRepository.updateById(account.id, {
-          accessToken: longLived.access_token,
-          tokenExpiresAt: this.computeTokenExpiry(),
-          lastError: undefined,
+          $set: { tokenExpiresAt },
+          $unset: { lastError: '' },
         });
-        refreshed += 1;
+        healthy += 1;
       } catch (error) {
-        logger.warn('Token refresh failed for account', {
+        logger.warn('Token check failed for account', {
           accountId: account.id,
           error: (error as Error).message,
         });
         await socialAccountRepository.updateById(account.id, {
-          lastError: 'Token refresh failed — please reconnect this account.',
+          $set: { lastError: 'Token refresh failed — please reconnect this account.' },
         });
       }
     }
 
-    return { checked: accounts.length, refreshed };
+    return { checked: accounts.length, healthy, invalid };
   }
 }
 

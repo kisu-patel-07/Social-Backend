@@ -14,6 +14,12 @@ export const apiLimiter = rateLimit({
     errorCode: 'RATE_LIMITED',
   },
   statusCode: HttpStatus.TOO_MANY_REQUESTS,
+  // Never throttle Meta webhook deliveries. They arrive from a small pool of
+  // Meta IPs, so a viral post can burst past the per-IP limit; a 429 to Meta
+  // triggers escalating retries and, if sustained, disables the app's webhook
+  // subscription — which would break automations for every workspace. The
+  // endpoint is already authenticated by X-Hub-Signature-256.
+  skip: (req) => req.originalUrl.includes('/webhooks/meta'),
 });
 
 /** Stricter limiter for sensitive auth endpoints (login, register, reset). */

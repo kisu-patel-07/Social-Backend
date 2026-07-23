@@ -239,9 +239,11 @@ class AccountService {
   ): Promise<boolean> {
     try {
       await metaClient.subscribePageWebhooks(pageId, accessToken);
+      // $unset (not `lastError: undefined`) — Mongoose strips undefined values
+      // from an update, so a plain assignment would leave a stale error behind.
       await socialAccountRepository.updateById(accountId, {
-        isWebhookSubscribed: true,
-        lastError: undefined,
+        $set: { isWebhookSubscribed: true },
+        $unset: { lastError: '' },
       });
       return true;
     } catch (error) {
@@ -265,7 +267,14 @@ class AccountService {
     if (!account.pageId) {
       throw new BadRequestError('This account has no linked Page to subscribe.');
     }
-    await this.trySubscribeWebhook(account.id, account.pageId, account.accessToken);
+    // getById excludes the access token (schema `select: false`), so load it
+    // explicitly — otherwise trySubscribeWebhook receives undefined and the
+    // appsecret_proof step throws, so the retry could never succeed.
+    const full = await socialAccountRepository.findWithToken(account.id);
+    if (!full?.accessToken) {
+      throw new BadRequestError('This account has no valid access token — please reconnect it.');
+    }
+    await this.trySubscribeWebhook(account.id, account.pageId, full.accessToken);
     return this.getById(user.workspaceId, id);
   }
 
