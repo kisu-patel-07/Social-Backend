@@ -107,17 +107,34 @@ class MetaClient {
     }
   }
 
-  /** List the Pages the user manages, including linked IG business accounts. */
+  /**
+   * List the Pages the user manages, including linked IG business accounts.
+   * Follows cursor pagination so users with more than one page of Pages (the
+   * default page size is 25) get all of them, not just the first page.
+   */
   async getUserPages(userAccessToken: string): Promise<MetaPage[]> {
     try {
-      const { data } = await this.http.get<{ data: MetaPage[] }>('/me/accounts', {
-        params: {
-          access_token: userAccessToken,
-          appsecret_proof: this.appSecretProof(userAccessToken),
-          fields: 'id,name,access_token,category,tasks,instagram_business_account{id,username}',
-        },
-      });
-      return data.data ?? [];
+      const pages: MetaPage[] = [];
+      let after: string | undefined;
+      // Safety cap: at 100/page this covers 1000 Pages and bounds the loop.
+      for (let page = 0; page < 10; page += 1) {
+        const { data } = await this.http.get<{
+          data: MetaPage[];
+          paging?: { cursors?: { after?: string }; next?: string };
+        }>('/me/accounts', {
+          params: {
+            access_token: userAccessToken,
+            appsecret_proof: this.appSecretProof(userAccessToken),
+            fields: 'id,name,access_token,category,tasks,instagram_business_account{id,username}',
+            limit: 100,
+            ...(after ? { after } : {}),
+          },
+        });
+        pages.push(...(data.data ?? []));
+        if (!data.paging?.next || !data.paging.cursors?.after) break;
+        after = data.paging.cursors.after;
+      }
+      return pages;
     } catch (error) {
       this.handleError('getUserPages', error);
     }

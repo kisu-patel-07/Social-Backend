@@ -5,11 +5,13 @@ import {
   BillingInterval,
   InvoiceStatus,
   MessageDirection,
+  MessageStatus,
   NotificationType,
   PaymentStatus,
   SubscriptionStatus,
 } from '../constants';
 import { HttpStatus } from '../constants/httpStatus';
+import { isProduction } from '../config/env';
 import { IPlan } from '../models/plan.model';
 import { ISubscription } from '../models/subscription.model';
 import { IInvoice } from '../models/invoice.model';
@@ -52,10 +54,21 @@ export interface WorkspaceEntitlements {
   entitlements: { studio: boolean; csvExport: boolean };
 }
 
-/** Fail-open defaults for workspaces without a subscription/plan (dev setups). */
+/** Permissive defaults for unseeded DEV setups only (never used in production). */
 const UNRESTRICTED: WorkspaceEntitlements = {
   limits: { connectedAccounts: -1, automations: -1, monthlyMessages: -1, teamMembers: -1 },
   entitlements: { studio: true, csvExport: true },
+};
+
+/**
+ * Conservative floor applied in PRODUCTION when a workspace has no plan (e.g. it
+ * signed up before plans were seeded, or its subscription doc was removed). The
+ * real Free plan is preferred; this is the last resort so a missing document can
+ * never grant unlimited usage — a fail-safe, not a fail-open.
+ */
+const FREE_FALLBACK: WorkspaceEntitlements = {
+  limits: { connectedAccounts: 1, automations: 2, monthlyMessages: 100, teamMembers: 1 },
+  entitlements: { studio: false, csvExport: false },
 };
 
 /** Throws PLAN_LIMIT_REACHED when count has hit a plan limit (-1 = unlimited). */
@@ -210,8 +223,22 @@ class SubscriptionService {
   async getEntitlements(workspaceId: string): Promise<WorkspaceEntitlements> {
     const subscription = await subscriptionRepository.findByWorkspace(workspaceId);
     const plan = subscription?.plan as unknown as IPlan | null;
-    if (!plan) return UNRESTRICTED;
-    const bonus = subscription?.bonus;
+    if (!plan) {
+      // No plan resolved. Stay permissive in unseeded dev; in production fail
+      // SAFE to the real Free plan (or a conservative floor) so a missing
+      // subscription document can never hand out unlimited usage.
+      if (!isProduction) return UNRESTRICTED;
+      const freePlan = await planRepository.findFreeActivePlan();
+      return freePlan ? this.entitlementsFromPlan(freePlan) : FREE_FALLBACK;
+    }
+    return this.entitlementsFromPlan(plan, subscription?.bonus);
+  }
+
+  /** Build a workspace's limits + feature switches from a plan (+ optional bonus). */
+  private entitlementsFromPlan(
+    plan: IPlan,
+    bonus?: { connectedAccounts?: number; automations?: number; monthlyMessages?: number }
+  ): WorkspaceEntitlements {
     const boosted = (limit: number, extra: number) => (limit === -1 ? -1 : limit + extra);
     return {
       limits: {
@@ -246,6 +273,8 @@ class SubscriptionService {
     const sent = await messageRepository.count({
       workspace: workspaceId,
       direction: MessageDirection.OUTBOUND,
+      // Failed sends never reached anyone, so they must not consume quota.
+      status: { $ne: MessageStatus.FAILED },
       createdAt: { $gte: startOfMonth },
     });
     return { sent, limit: limits.monthlyMessages, exceeded: sent >= limits.monthlyMessages };

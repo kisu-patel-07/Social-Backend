@@ -1,5 +1,5 @@
 import { Schema, model, Document, Types } from 'mongoose';
-import { AutomationStatus, AutomationTrigger, Platform } from '../constants';
+import { AutomationStatus, AutomationTrigger, KeywordMatchType, Platform } from '../constants';
 
 export interface IAutomation extends Document {
   _id: Types.ObjectId;
@@ -18,6 +18,8 @@ export interface IAutomation extends Document {
   status: AutomationStatus;
   /** Denormalized keyword strings (lowercased) for fast matching at webhook time. */
   keywords: string[];
+  /** How keywords match at webhook time: substring (contains) or whole-word (exact). */
+  matchType: KeywordMatchType;
   /** Lifetime trigger counter for analytics/sorting. */
   triggerCount: number;
   lastTriggeredAt?: Date;
@@ -53,6 +55,11 @@ const automationSchema = new Schema<IAutomation>(
       index: true,
     },
     keywords: { type: [String], default: [], index: true },
+    matchType: {
+      type: String,
+      enum: Object.values(KeywordMatchType),
+      default: KeywordMatchType.CONTAINS,
+    },
     triggerCount: { type: Number, default: 0 },
     lastTriggeredAt: { type: Date },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },

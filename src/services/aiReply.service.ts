@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { env } from '../config/env';
 import { logger } from '../config/logger';
+import { assertSafePublicUrl } from '../utils/ssrf';
 
 /**
  * AI auto-reply generator. Talks to any OpenAI-compatible chat-completions
@@ -52,6 +53,14 @@ class AiReplyService {
     if (!apiKey || !businessContext.trim() || !userMessage.trim()) return null;
 
     try {
+      // A tenant-provided (BYOK) base URL is untrusted — verify it points at a
+      // public https host before we make an authenticated request to it, so it
+      // can't be aimed at the cloud-metadata endpoint or internal services
+      // (SSRF). The platform default is trusted and skipped.
+      if (baseUrl !== env.AI_BASE_URL) {
+        await assertSafePublicUrl(baseUrl.replace(/\/$/, ''));
+      }
+
       const response = await axios.post(
         `${baseUrl.replace(/\/$/, '')}/chat/completions`,
         {

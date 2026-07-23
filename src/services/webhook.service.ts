@@ -5,6 +5,7 @@ import {
   ActivityAction,
   AutomationStatus,
   AutomationTrigger,
+  KeywordMatchType,
   LeadSource,
   LeadStatus,
   MessageDirection,
@@ -27,6 +28,7 @@ import {
   workspaceRepository,
 } from '../repositories';
 import { startOfDay } from '../utils/date';
+import { escapeRegExp } from '../utils/text';
 import { activityService } from './activity.service';
 import { aiReplyService } from './aiReply.service';
 import { analyticsService } from './analytics.service';
@@ -96,7 +98,14 @@ class WebhookService {
     const haystack = text.toLowerCase();
     for (const automation of automations) {
       if (automation.status !== AutomationStatus.ACTIVE) continue;
-      const matched = automation.keywords.find((kw) => haystack.includes(kw));
+      // EXACT matches whole words only (so "hi" does not fire on "shipping");
+      // CONTAINS is a substring match. Mirrors the Studio engine's semantics.
+      const exact = automation.matchType === KeywordMatchType.EXACT;
+      const matched = automation.keywords.find((kw) =>
+        exact
+          ? new RegExp(`(^|\\W)${escapeRegExp(kw)}($|\\W)`, 'i').test(haystack)
+          : haystack.includes(kw)
+      );
       if (matched) return { automation, keyword: matched };
     }
     return null;
@@ -214,17 +223,16 @@ class WebhookService {
     const now = new Date();
 
     // Ensure the DM thread exists *before* we send the automated DM, so the
-    // outbound message can be linked to it and appears in the conversation
-    // view — otherwise the thread shows empty even though the list preview
-    // (which reads the conversation's lastMessagePreview) has text.
-    const conversation = await conversationRepository.upsertForInbound({
+    // outbound message can be linked to it. Seed it as an OUTBOUND thread — no
+    // unread bump, no preview yet — because the DM hasn't been delivered; the
+    // preview is set from sendPrivateMessage only after the send succeeds.
+    const conversation = await conversationRepository.upsertForOutbound({
       workspace: account.workspace.toString(),
       socialAccount: account._id.toString(),
       platform: comment.platform,
       participantId: comment.fromId,
       participantUsername: comment.fromUsername,
       participantName: comment.fromName,
-      preview: automation.privateMessage,
       at: now,
     });
 
@@ -310,6 +318,12 @@ class WebhookService {
         account.accessToken
       );
       await messageRepository.updateById(dm._id, { status: MessageStatus.SENT });
+      // Now that the DM is actually delivered, surface it as the thread preview.
+      await conversationRepository.setLastMessagePreview(
+        conversationId.toString(),
+        dmText,
+        new Date()
+      );
       await analyticsService.track(account.workspace.toString(), 'dmSent', comment.platform);
       logger.info('Private DM sent', { commentId: comment.commentId, toId: comment.fromId });
     } catch (error) {

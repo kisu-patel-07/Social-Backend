@@ -31,10 +31,7 @@ import { linkTrackingService } from './linkTracking.service';
 import { subscriptionService } from './subscription.service';
 import { IncomingComment, metaClient } from './meta';
 import { notificationService } from './notification.service';
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegExp } from '../utils/text';
 
 /**
  * Automation Studio (v2 trial) webhook engine. Runs ONLY when no classic
@@ -270,14 +267,15 @@ class StudioEngineService {
     const now = new Date();
 
     // Thread must exist before the DM so the outbound message links to it.
-    const conversation = await conversationRepository.upsertForInbound({
+    // Seed it as OUTBOUND (no unread bump, no preview) — the DM isn't delivered
+    // yet; the preview is set below only once the send succeeds.
+    const conversation = await conversationRepository.upsertForOutbound({
       workspace: account.workspace.toString(),
       socialAccount: account._id.toString(),
       platform: comment.platform,
       participantId: comment.fromId,
       participantUsername: comment.fromUsername,
       participantName: comment.fromName,
-      preview: automation.dmMessage,
       at: now,
     });
 
@@ -285,6 +283,13 @@ class StudioEngineService {
       await this.sendPublicReply(account, automation, comment);
     }
     const dmSent = await this.sendPrivateMessage(account, automation, comment, conversation._id);
+    if (dmSent) {
+      await conversationRepository.setLastMessagePreview(
+        conversation._id.toString(),
+        automation.dmMessage,
+        now
+      );
+    }
     await this.registerTriggerOutcome(
       account,
       automation,

@@ -7,3 +7,4 @@ export * from './asyncHandler';
 export * from './csv';
 export * from './date';
 export * from './cookies';
+export * from './text';

@@ -6,7 +6,14 @@
 /** Escape a single CSV cell value. */
 function escapeCell(value: unknown): string {
   if (value === null || value === undefined) return '';
-  const str = String(value);
+  let str = String(value);
+  // Neutralize spreadsheet formula injection: a cell starting with =, +, -, @,
+  // or a control char is executed as a formula by Excel/Sheets. Lead values
+  // (names, comments) come from untrusted commenters, so prefix such cells with
+  // an apostrophe to force text. RFC-4180 quoting alone does NOT prevent this.
+  if (/^[=+\-@\t\r]/.test(str)) {
+    str = `'${str}`;
+  }
   if (/[",\n\r]/.test(str)) {
     return `"${str.replace(/"/g, '""')}"`;
   }

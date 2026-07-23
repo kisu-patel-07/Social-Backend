@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isSafePublicUrlSync } from '../utils/ssrf';
 
 export const updateProfileSchema = z.object({
   body: z.object({
@@ -19,7 +20,14 @@ export const updateWorkspaceSchema = z.object({
         dailyLimit: z.coerce.number().int().min(1).max(1000).optional(),
         // BYOK: empty string clears the field (falls back to platform default).
         apiKey: z.string().trim().max(300).optional(),
-        baseUrl: z.string().trim().url().max(300).or(z.literal('')).optional(),
+        baseUrl: z
+          .string()
+          .trim()
+          .url()
+          .max(300)
+          .refine(isSafePublicUrlSync, 'AI base URL must be an https URL to a public host')
+          .or(z.literal(''))
+          .optional(),
         model: z.string().trim().max(120).optional(),
       })
       .optional(),

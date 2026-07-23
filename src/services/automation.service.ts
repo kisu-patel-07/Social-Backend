@@ -157,6 +157,7 @@ class AutomationService {
       name: params.name,
       targetPostId: params.targetPostId,
       keywords,
+      matchType,
       triggerType: params.triggerType ?? AutomationTrigger.COMMENT,
       publicReply: params.publicReply,
       privateMessage: params.privateMessage,
@@ -206,8 +207,7 @@ class AutomationService {
   async update(user: AuthUser, id: string, params: UpdateAutomationParams): Promise<IAutomation> {
     const automation = await this.getById(user.workspaceId, id);
     // The trigger the automation will have after this update.
-    const nextTrigger =
-      params.triggerType ?? automation.triggerType ?? AutomationTrigger.COMMENT;
+    const nextTrigger = params.triggerType ?? automation.triggerType ?? AutomationTrigger.COMMENT;
 
     let keywords: string[] | undefined;
     if (params.keywords) {
@@ -232,6 +232,7 @@ class AutomationService {
       ...(params.privateMessage !== undefined ? { privateMessage: params.privateMessage } : {}),
       ...(params.status !== undefined ? { status: params.status } : {}),
       ...(keywords ? { keywords } : {}),
+      ...(params.matchType !== undefined ? { matchType: params.matchType } : {}),
     });
 
     if (!updated) throw new NotFoundError('Automation not found');
