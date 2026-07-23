@@ -123,6 +123,18 @@ class WebhookService {
       return;
     }
 
+    // Ignore comments authored by the connected account itself — Meta delivers
+    // the automation's own public reply back as a fresh comment event (new id,
+    // so idempotency doesn't catch it). Without this guard the reply re-matches
+    // and triggers endlessly. Mirrors the DM echo filter in handleMessage().
+    if (comment.fromId === account.pageId || comment.fromId === account.instagramBusinessId) {
+      logger.info('Comment dropped: authored by our own account (self-reply loop guard)', {
+        commentId: comment.commentId,
+        fromId: comment.fromId,
+      });
+      return;
+    }
+
     // Idempotency: skip if we've already recorded this comment.
     const seen = await messageRepository.existsByExternalId(
       account._id.toString(),
