@@ -42,13 +42,13 @@ class MetaService {
     // user actually granted at consent. Remove once the IG-connect issue is resolved.
     try {
       const tokenInfo = await metaClient.debugToken(longLived.access_token);
-      logger.info('[META DIAG] granted scopes', { scopes: tokenInfo.scopes });
+      logger.warn('[META DIAG] granted scopes', { scopes: tokenInfo.scopes });
     } catch (error) {
       logger.warn('[META DIAG] could not inspect token scopes', {
         error: (error as Error).message,
       });
     }
-    logger.info('[META DIAG] pages returned by /me/accounts', {
+    logger.warn('[META DIAG] pages returned by /me/accounts', {
       count: pages.length,
       pages: pages.map((p) => ({
         id: p.id,
