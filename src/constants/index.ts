@@ -66,6 +66,24 @@ export enum StudioPostScope {
   SPECIFIC = 'specific',
 }
 
+/**
+ * The step a per-user Studio DM flow is currently waiting on. A flow chains
+ * optional gates before the link is delivered: follow-gate → email → link,
+ * with an optional follow-up if the link goes unclicked.
+ */
+export enum FlowStep {
+  /** Follow-gate sent; waiting for the "I'm following" tap. */
+  AWAIT_FOLLOW = 'await_follow',
+  /** Email asked; waiting for the user to reply with it. */
+  AWAIT_EMAIL = 'await_email',
+  /** Opening DM sent; waiting for the "Send me the link" tap. */
+  AWAIT_CLICK = 'await_click',
+  /** Link delivered; a follow-up may still fire if it goes unclicked. */
+  LINK_SENT = 'link_sent',
+  /** Flow finished (link clicked, or nothing left to do). */
+  DONE = 'done',
+}
+
 export enum MessageDirection {
   INBOUND = 'inbound',
   OUTBOUND = 'outbound',

@@ -19,7 +19,7 @@ import {
 } from '../repositories';
 import { AnalyticsMetric } from '../repositories/analytics.repository';
 import { linkTrackingService } from './linkTracking.service';
-import { daysAgo, endOfDay, startOfDay, toDateKey } from '../utils/date';
+import { daysAgo, endOfDayUTC, startOfDayUTC, toDateKeyUTC } from '../utils/date';
 
 export interface DashboardSummary {
   connectedAccounts: number;
@@ -84,9 +84,9 @@ class AnalyticsService {
   /** Build the dashboard summary cards. */
   async getDashboardSummary(workspaceId: string): Promise<DashboardSummary> {
     const now = new Date();
-    const todayStart = startOfDay(now);
-    const todayEnd = endOfDay(now);
-    const monthStart = startOfDay(daysAgo(30));
+    const todayStart = startOfDayUTC(now);
+    const todayEnd = endOfDayUTC(now);
+    const monthStart = startOfDayUTC(daysAgo(30));
 
     const [
       connectedAccounts,
@@ -124,8 +124,8 @@ class AnalyticsService {
 
   /** Build the analytics page overview (range in days, default 30). */
   async getOverview(workspaceId: string, rangeDays = 30): Promise<AnalyticsOverview> {
-    const end = endOfDay(new Date());
-    const start = startOfDay(daysAgo(rangeDays));
+    const end = endOfDayUTC(new Date());
+    const start = startOfDayUTC(daysAgo(rangeDays));
 
     const [connectedAccounts, sums, series, topKeywordDoc, platformAgg] = await Promise.all([
       socialAccountRepository.countActiveByWorkspace(workspaceId),
@@ -179,8 +179,8 @@ class AnalyticsService {
    * field, so a single message aggregation serves both kinds.
    */
   async getAutomationFunnels(workspaceId: string, rangeDays = 30): Promise<AutomationFunnels> {
-    const end = endOfDay(new Date());
-    const start = startOfDay(daysAgo(rangeDays));
+    const end = endOfDayUTC(new Date());
+    const start = startOfDayUTC(daysAgo(rangeDays));
     const wsId = new Types.ObjectId(workspaceId);
 
     const [automations, studioAutomations, messageAgg, leadAgg, clicks] = await Promise.all([
@@ -335,7 +335,7 @@ class AnalyticsService {
 
   /** Convenience: today's date key (for callers that need bucket alignment). */
   todayKey(): string {
-    return toDateKey(new Date());
+    return toDateKeyUTC(new Date());
   }
 }
 

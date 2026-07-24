@@ -15,6 +15,7 @@ import contactRoutes from './contact.routes';
 import demoRequestRoutes from './demoRequest.routes';
 import giveawayRoutes from './giveaway.routes';
 import { linkTrackingService } from '../services/linkTracking.service';
+import { flowEngineService } from '../services/flowEngine.service';
 import { asyncHandler } from '../utils/asyncHandler';
 import { env } from '../config/env';
 
@@ -45,6 +46,12 @@ router.get(
   '/r/:slug',
   asyncHandler(async (req, res) => {
     const target = await linkTrackingService.resolveClick(req.params.slug);
+    // `fr` marks which flow run this link belongs to, so a click cancels its
+    // pending follow-up. Best-effort — never block the redirect.
+    const fr = req.query.fr;
+    if (typeof fr === 'string') {
+      await flowEngineService.markLinkClicked(fr).catch(() => undefined);
+    }
     res.redirect(302, target ?? env.CLIENT_URL.split(',')[0]);
   })
 );

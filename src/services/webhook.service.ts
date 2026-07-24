@@ -34,10 +34,17 @@ import { aiReplyService } from './aiReply.service';
 import { analyticsService } from './analytics.service';
 import { featureService } from './feature.service';
 import { emailService } from './email/email.service';
-import { IncomingComment, IncomingMessage, metaClient, parseWebhookPayload } from './meta';
+import {
+  IncomingComment,
+  IncomingMessage,
+  IncomingPostback,
+  metaClient,
+  parseWebhookPayload,
+} from './meta';
 import { notificationService } from './notification.service';
 import { linkTrackingService } from './linkTracking.service';
 import { studioEngineService } from './studioEngine.service';
+import { flowEngineService } from './flowEngine.service';
 import { subscriptionService } from './subscription.service';
 
 /**
@@ -51,10 +58,11 @@ import { subscriptionService } from './subscription.service';
 class WebhookService {
   /** Entry point: parse a raw payload and process every contained event. */
   async process(payload: unknown): Promise<void> {
-    const { comments, messages } = parseWebhookPayload(payload);
+    const { comments, messages, postbacks } = parseWebhookPayload(payload);
     logger.info('Webhook payload parsed', {
       comments: comments.length,
       messages: messages.length,
+      postbacks: postbacks.length,
     });
 
     for (const comment of comments) {
@@ -78,6 +86,23 @@ class WebhookService {
         });
       }
     }
+
+    for (const postback of postbacks) {
+      try {
+        await this.handlePostback(postback);
+      } catch (error) {
+        logger.error('Failed to handle postback event', {
+          error: (error as Error).message,
+        });
+      }
+    }
+  }
+
+  /** A flow button was tapped — advance that user's flow. */
+  private async handlePostback(postback: IncomingPostback): Promise<void> {
+    const account = await this.resolveAccount(postback.platform, postback.accountExternalId);
+    if (!account || !account.isActive) return;
+    await flowEngineService.handlePostback(account, postback);
   }
 
   /** Resolve the connected account a webhook event belongs to. */
@@ -144,32 +169,42 @@ class WebhookService {
       return;
     }
 
-    // Idempotency: skip if we've already recorded this comment.
-    const seen = await messageRepository.existsByExternalId(
+    // Idempotency with crash recovery: skip only if a prior run fully completed
+    // (automationHandledAt set). A record that exists but is NOT marked handled
+    // is a crashed-mid-flight attempt — reprocess it. Sends are idempotent
+    // (dedupeKey), so reprocessing never sends a duplicate reply.
+    const priorInbound = await messageRepository.findByExternalId(
       account._id.toString(),
       comment.commentId
     );
-    if (seen) {
+    if (priorInbound?.automationHandledAt) {
       logger.info('Comment dropped: already processed (idempotency)', {
         commentId: comment.commentId,
       });
       return;
     }
 
-    // Record the inbound comment.
-    await messageRepository.create({
-      workspace: account.workspace,
-      socialAccount: account._id,
-      platform: comment.platform,
-      direction: MessageDirection.INBOUND,
-      type: MessageType.COMMENT,
-      status: MessageStatus.RECEIVED,
-      fromId: comment.fromId,
-      fromUsername: comment.fromUsername ?? comment.fromName,
-      text: comment.text,
-      externalId: comment.commentId,
-      postId: comment.postId,
-    });
+    // Record the inbound comment (reuse the record on a reprocess).
+    const inbound =
+      priorInbound ??
+      (await messageRepository.create({
+        workspace: account.workspace,
+        socialAccount: account._id,
+        platform: comment.platform,
+        direction: MessageDirection.INBOUND,
+        type: MessageType.COMMENT,
+        status: MessageStatus.RECEIVED,
+        fromId: comment.fromId,
+        fromUsername: comment.fromUsername ?? comment.fromName,
+        text: comment.text,
+        externalId: comment.commentId,
+        postId: comment.postId,
+      }));
+    // Mark this event fully processed. Called at every terminal path so a
+    // completed run (reply sent, or deliberately skipped) is never reprocessed;
+    // a crash before this line leaves it unmarked for a safe retry.
+    const markHandled = (): Promise<unknown> =>
+      messageRepository.updateById(inbound._id, { automationHandledAt: new Date() });
 
     // Trial/subscription gate: the comment stays recorded in the inbox, but
     // no automated replies go out for lapsed workspaces.
@@ -180,6 +215,7 @@ class WebhookService {
         reason: access.reason,
         commentId: comment.commentId,
       });
+      await markHandled();
       return;
     }
 
@@ -191,6 +227,7 @@ class WebhookService {
         limit: quota.limit,
         commentId: comment.commentId,
       });
+      await markHandled();
       return;
     }
 
@@ -211,6 +248,7 @@ class WebhookService {
           candidateAutomations: automations.map((a) => ({ name: a.name, keywords: a.keywords })),
         });
       }
+      await markHandled();
       return;
     }
 
@@ -244,6 +282,9 @@ class WebhookService {
 
     // 3) Lead + analytics + notifications.
     await this.registerTriggerOutcome(account, automation, comment, keyword, now, conversation);
+
+    // Fully processed — a retry after this point is dropped by the guard above.
+    await markHandled();
   }
 
   private async sendPublicReply(
@@ -253,19 +294,25 @@ class WebhookService {
   ): Promise<void> {
     // DM-triggered automations have no public reply; nothing to send.
     if (!automation.publicReply) return;
-    const msg = await messageRepository.create({
-      workspace: account.workspace,
-      socialAccount: account._id,
-      platform: comment.platform,
-      direction: MessageDirection.OUTBOUND,
-      type: MessageType.PUBLIC_REPLY,
-      status: MessageStatus.PENDING,
-      toId: comment.fromId,
-      text: automation.publicReply,
-      postId: comment.postId,
-      automation: automation._id,
-      isAutomated: true,
-    });
+    // Idempotent claim: a webhook retry reuses this record and skips if the
+    // reply already went out, so reprocessing never posts a duplicate reply.
+    const { message: msg, alreadySent } = await messageRepository.claimSend(
+      `cpr:${account._id}:${comment.commentId}:${automation._id}`,
+      {
+        workspace: account.workspace,
+        socialAccount: account._id,
+        platform: comment.platform,
+        direction: MessageDirection.OUTBOUND,
+        type: MessageType.PUBLIC_REPLY,
+        status: MessageStatus.PENDING,
+        toId: comment.fromId,
+        text: automation.publicReply,
+        postId: comment.postId,
+        automation: automation._id,
+        isAutomated: true,
+      }
+    );
+    if (alreadySent) return;
     try {
       await metaClient.replyToComment(
         comment.commentId,
@@ -297,19 +344,24 @@ class WebhookService {
       { workspaceId: account.workspace.toString(), automationId: automation._id.toString() },
       automation.privateMessage
     );
-    const dm = await messageRepository.create({
-      workspace: account.workspace,
-      socialAccount: account._id,
-      conversation: conversationId,
-      platform: comment.platform,
-      direction: MessageDirection.OUTBOUND,
-      type: MessageType.DIRECT_MESSAGE,
-      status: MessageStatus.PENDING,
-      toId: comment.fromId,
-      text: dmText,
-      automation: automation._id,
-      isAutomated: true,
-    });
+    // Idempotent claim so a webhook retry never sends the commenter a second DM.
+    const { message: dm, alreadySent } = await messageRepository.claimSend(
+      `cdm:${account._id}:${comment.commentId}:${automation._id}`,
+      {
+        workspace: account.workspace,
+        socialAccount: account._id,
+        conversation: conversationId,
+        platform: comment.platform,
+        direction: MessageDirection.OUTBOUND,
+        type: MessageType.DIRECT_MESSAGE,
+        status: MessageStatus.PENDING,
+        toId: comment.fromId,
+        text: dmText,
+        automation: automation._id,
+        isAutomated: true,
+      }
+    );
+    if (alreadySent) return;
     try {
       await metaClient.sendPrivateReply(
         account.pageId!,
@@ -527,6 +579,10 @@ class WebhookService {
     );
 
     await this.upsertDmContact(account, message, conversation, now);
+
+    // If this DM is a reply an in-progress flow is waiting on (an email), let
+    // the flow consume it rather than firing DM-keyword automations.
+    if (await flowEngineService.handleText(account, message)) return;
 
     // DM keyword automations: auto-reply inside the thread when a keyword hits.
     await this.runDmAutomations(account, message, conversation._id, now);

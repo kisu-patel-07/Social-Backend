@@ -5,6 +5,7 @@ import { MessageDirection, MessageType } from '../constants';
 import { messageRepository } from '../repositories';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess } from '../utils/apiResponse';
+import { containsRegex } from '../utils/text';
 
 interface Participant {
   fromId: string;
@@ -85,7 +86,7 @@ export const giveawayController = {
       fromId: { $exists: true, $nin: [null, ''] },
     };
     if (socialAccountId) match.socialAccount = new Types.ObjectId(socialAccountId);
-    if (keyword?.trim()) match.text = { $regex: keyword.trim(), $options: 'i' };
+    if (keyword?.trim()) match.text = containsRegex(keyword.trim());
 
     const participants = await messageRepository.aggregate<{
       _id: string;

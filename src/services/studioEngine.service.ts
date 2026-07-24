@@ -32,6 +32,7 @@ import { subscriptionService } from './subscription.service';
 import { IncomingComment, metaClient } from './meta';
 import { notificationService } from './notification.service';
 import { escapeRegExp } from '../utils/text';
+import { flowEngineService } from './flowEngine.service';
 
 /**
  * Automation Studio (v2 trial) webhook engine. Runs ONLY when no classic
@@ -282,13 +283,27 @@ class StudioEngineService {
     if (automation.publicReplyEnabled && automation.publicReplies.length) {
       await this.sendPublicReply(account, automation, comment);
     }
-    const dmSent = await this.sendPrivateMessage(account, automation, comment, conversation._id);
-    if (dmSent) {
-      await conversationRepository.setLastMessagePreview(
-        conversation._id.toString(),
-        automation.dmMessage,
-        now
-      );
+    // The DM is independently optional — a public-reply-only automation skips it.
+    let dmSent = false;
+    if (automation.dmEnabled) {
+      if (flowEngineService.hasFlow(automation)) {
+        // Multi-step flow: follow-gate / ask-email / click-to-deliver / follow-up.
+        dmSent = await flowEngineService.startFromComment(
+          account,
+          automation,
+          comment,
+          conversation._id
+        );
+      } else {
+        dmSent = await this.sendPrivateMessage(account, automation, comment, conversation._id);
+        if (dmSent) {
+          await conversationRepository.setLastMessagePreview(
+            conversation._id.toString(),
+            automation.dmMessage,
+            now
+          );
+        }
+      }
     }
     await this.registerTriggerOutcome(
       account,
@@ -310,21 +325,28 @@ class StudioEngineService {
   ): Promise<void> {
     const variation =
       automation.publicReplies[Math.floor(Math.random() * automation.publicReplies.length)];
-    const msg = await messageRepository.create({
-      workspace: account.workspace,
-      socialAccount: account._id,
-      platform: comment.platform,
-      direction: MessageDirection.OUTBOUND,
-      type: MessageType.PUBLIC_REPLY,
-      status: MessageStatus.PENDING,
-      toId: comment.fromId,
-      text: variation,
-      postId: comment.postId,
-      automation: automation._id,
-      isAutomated: true,
-    });
+    // Idempotent claim: a webhook retry reuses this record and skips if already
+    // sent, so reprocessing never posts a duplicate public reply. The random
+    // variation is only chosen when a fresh record is actually created.
+    const { message: msg, alreadySent } = await messageRepository.claimSend(
+      `spr:${account._id}:${comment.commentId}:${automation._id}`,
+      {
+        workspace: account.workspace,
+        socialAccount: account._id,
+        platform: comment.platform,
+        direction: MessageDirection.OUTBOUND,
+        type: MessageType.PUBLIC_REPLY,
+        status: MessageStatus.PENDING,
+        toId: comment.fromId,
+        text: variation,
+        postId: comment.postId,
+        automation: automation._id,
+        isAutomated: true,
+      }
+    );
+    if (alreadySent) return;
     try {
-      await metaClient.replyToComment(comment.commentId, variation, account.accessToken);
+      await metaClient.replyToComment(comment.commentId, msg.text, account.accessToken);
       await messageRepository.updateById(msg._id, { status: MessageStatus.SENT });
       logger.info('Studio public reply sent', { commentId: comment.commentId });
     } catch (error) {
@@ -357,24 +379,29 @@ class StudioEngineService {
         url: await linkTrackingService.wrapUrl(linkSource, b.url),
       }))
     );
-    const dm = await messageRepository.create({
-      workspace: account.workspace,
-      socialAccount: account._id,
-      conversation: conversationId,
-      platform: comment.platform,
-      direction: MessageDirection.OUTBOUND,
-      type: MessageType.DIRECT_MESSAGE,
-      status: MessageStatus.PENDING,
-      toId: comment.fromId,
-      text: dmText,
-      automation: automation._id,
-      isAutomated: true,
-    });
+    // Idempotent claim so a webhook retry never sends the commenter a second DM.
+    const { message: dm, alreadySent } = await messageRepository.claimSend(
+      `sdm:${account._id}:${comment.commentId}:${automation._id}`,
+      {
+        workspace: account.workspace,
+        socialAccount: account._id,
+        conversation: conversationId,
+        platform: comment.platform,
+        direction: MessageDirection.OUTBOUND,
+        type: MessageType.DIRECT_MESSAGE,
+        status: MessageStatus.PENDING,
+        toId: comment.fromId,
+        text: dmText,
+        automation: automation._id,
+        isAutomated: true,
+      }
+    );
+    if (alreadySent) return true;
     try {
       await metaClient.sendPrivateReplyWithButtons(
         account.pageId!,
         comment.commentId,
-        dmText,
+        dm.text,
         buttons,
         account.accessToken
       );

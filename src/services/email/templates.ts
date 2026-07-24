@@ -1,4 +1,5 @@
 import { env } from '../../config/env';
+import { htmlEscape } from '../../utils/text';
 
 interface EmailContent {
   subject: string;
@@ -31,7 +32,7 @@ export const emailTemplates = {
     return {
       subject: `Welcome to ${env.BREVO_SENDER_NAME} 🎉`,
       html: layout(
-        `Welcome, ${name}!`,
+        `Welcome, ${htmlEscape(name)}!`,
         `<p>Thanks for joining ${env.BREVO_SENDER_NAME}. Connect your Instagram Business or Facebook Page to start automating comment-to-DM replies.</p>`
       ),
       text: `Welcome, ${name}! Thanks for joining ${env.BREVO_SENDER_NAME}.`,
@@ -42,7 +43,7 @@ export const emailTemplates = {
     return {
       subject: `${otp} is your verification code`,
       html: layout(
-        `Hi ${name},`,
+        `Hi ${htmlEscape(name)},`,
         `<p>Enter this code to verify your email address:</p>
          <p style="font-size:32px;font-weight:700;letter-spacing:8px;text-align:center;background:#f1f5f9;border-radius:12px;padding:16px 8px;margin:16px 0;">${otp}</p>
          <p style="font-size:13px;color:#64748b;">The code expires in 10 minutes.</p>
@@ -57,7 +58,7 @@ export const emailTemplates = {
     return {
       subject: 'Reset your password',
       html: layout(
-        `Hi ${name},`,
+        `Hi ${htmlEscape(name)},`,
         `<p>We received a request to reset your password. This link expires soon.</p><p>${button(
           'Reset Password',
           resetUrl
@@ -71,11 +72,10 @@ export const emailTemplates = {
     return {
       subject: `New lead from ${platform} 🎯`,
       html: layout(
-        `Hi ${name},`,
-        `<p>You have a new lead: <strong>${leadName}</strong> from <strong>${platform}</strong>.</p><p>${button(
-          'View Lead',
-          link
-        )}</p>`
+        `Hi ${htmlEscape(name)},`,
+        `<p>You have a new lead: <strong>${htmlEscape(leadName)}</strong> from <strong>${htmlEscape(
+          platform
+        )}</strong>.</p><p>${button('View Lead', link)}</p>`
       ),
       text: `New lead: ${leadName} from ${platform}. ${link}`,
     };
@@ -89,7 +89,7 @@ export const emailTemplates = {
     return {
       subject: 'Your weekly report 📊',
       html: layout(
-        `Hi ${name},`,
+        `Hi ${htmlEscape(name)},`,
         `<p>Here's your activity from the past 7 days:</p>
          <ul>
            <li>Comments triggered: <strong>${stats.comments}</strong></li>
@@ -105,17 +105,19 @@ export const emailTemplates = {
   subscription(name: string, message: string): EmailContent {
     return {
       subject: 'Subscription update',
-      html: layout(`Hi ${name},`, `<p>${message}</p>`),
+      html: layout(`Hi ${htmlEscape(name)},`, `<p>${htmlEscape(message)}</p>`),
       text: message,
     };
   },
 
   demoRequestReceived(name: string, topicLabel: string, preferred?: string): EmailContent {
-    const preferredLine = preferred ? `<p>You asked for: <strong>${preferred}</strong>.</p>` : '';
+    const preferredLine = preferred
+      ? `<p>You asked for: <strong>${htmlEscape(preferred)}</strong>.</p>`
+      : '';
     return {
       subject: `We got your request — ${topicLabel} 📅`,
       html: layout(
-        `Hi ${name},`,
+        `Hi ${htmlEscape(name)},`,
         `<p>Thanks for booking a <strong>${topicLabel.toLowerCase()}</strong> with ${env.BREVO_SENDER_NAME}!</p>
          ${preferredLine}
          <p>A real human will email you within 24 hours (Mon–Sat, IST) to confirm the exact time.</p>`
@@ -128,9 +130,11 @@ export const emailTemplates = {
     return {
       subject: `Your call is confirmed: ${whenText} ✅`,
       html: layout(
-        `Hi ${name},`,
+        `Hi ${htmlEscape(name)},`,
         `<p>Your <strong>${topicLabel.toLowerCase()}</strong> with ${env.BREVO_SENDER_NAME} is confirmed for:</p>
-         <p style="font-size:20px;font-weight:700;text-align:center;background:#f1f5f9;border-radius:12px;padding:16px 8px;margin:16px 0;">${whenText}</p>
+         <p style="font-size:20px;font-weight:700;text-align:center;background:#f1f5f9;border-radius:12px;padding:16px 8px;margin:16px 0;">${htmlEscape(
+           whenText
+         )}</p>
          <p>We'll send the meeting link to this email address before the call. Need to change the time? Just reply to this email.</p>`
       ),
       text: `Hi ${name}, your ${topicLabel.toLowerCase()} is confirmed for ${whenText}. We'll send the meeting link before the call. Reply to this email to reschedule.`,

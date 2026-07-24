@@ -15,6 +15,7 @@ import { PaginatedResult, PaginationOptions } from '../types/common.types';
 import { NotFoundError } from '../utils/AppError';
 import { CsvColumn, toCsv } from '../utils/csv';
 import { toDateKey } from '../utils/date';
+import { containsRegex } from '../utils/text';
 import { activityService } from './activity.service';
 
 interface LeadListFilters extends PaginationOptions {
@@ -79,9 +80,9 @@ class LeadService {
     if (filters.tag) query.tags = filters.tag;
     if (filters.search) {
       query.$or = [
-        { username: { $regex: filters.search, $options: 'i' } },
-        { name: { $regex: filters.search, $options: 'i' } },
-        { comment: { $regex: filters.search, $options: 'i' } },
+        { username: containsRegex(filters.search) },
+        { name: containsRegex(filters.search) },
+        { comment: containsRegex(filters.search) },
       ];
     }
     return query;

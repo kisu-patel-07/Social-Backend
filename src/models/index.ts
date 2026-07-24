@@ -23,3 +23,5 @@ export { PlanModel, IPlan } from './plan.model';
 export { SubscriptionModel, ISubscription } from './subscription.model';
 export { InvoiceModel, IInvoice } from './invoice.model';
 export { PaymentModel, IPayment } from './payment.model';
+export { RateLimitModel, IRateLimit } from './rateLimit.model';
+export { FlowRunModel, IFlowRun } from './flowRun.model';

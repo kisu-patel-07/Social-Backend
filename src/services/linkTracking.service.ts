@@ -170,6 +170,14 @@ class LinkTrackingService {
     }
     return { total, byAutomation, byStudioAutomation };
   }
+
+  /** Delete all tracked links and click logs for a workspace (account deletion). */
+  async deleteByWorkspace(workspaceId: string): Promise<void> {
+    await Promise.all([
+      TrackedLinkModel.deleteMany({ workspace: workspaceId }).exec(),
+      LinkClickModel.deleteMany({ workspace: workspaceId }).exec(),
+    ]);
+  }
 }
 
 export const linkTrackingService = new LinkTrackingService();

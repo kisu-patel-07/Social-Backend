@@ -258,24 +258,36 @@ class SubscriptionService {
   }
 
   /**
-   * Outbound message usage for the current calendar month vs the plan limit.
-   * The single source of truth for the reply quota — used by the automation
-   * engines (skip + log) and manual inbox replies (403) alike.
+   * Outbound message usage in the CURRENT BILLING PERIOD vs the plan limit.
+   * The window is the subscription's current period start (the plan's start /
+   * last renewal date) through now, so the quota resets each period on the
+   * plan's own date — e.g. a 30-day plan bought on the 4th counts from the 4th
+   * — rather than on the calendar month. Single source of truth for the reply
+   * quota (automation engines skip+log, and manual inbox replies 403).
+   *
+   * Both the automated public reply and the DM count (one unit each).
    */
   async getMessageQuota(
     workspaceId: string
   ): Promise<{ sent: number; limit: number; exceeded: boolean }> {
     const { limits } = await this.getEntitlements(workspaceId);
     if (limits.monthlyMessages === -1) return { sent: 0, limit: -1, exceeded: false };
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
+
+    const subscription = await subscriptionRepository.findByWorkspace(workspaceId);
+    // Count from the current period's start; fall back to the calendar month
+    // only when there is no subscription record (unseeded/dev).
+    let windowStart = subscription?.currentPeriodStart;
+    if (!windowStart) {
+      windowStart = new Date();
+      windowStart.setDate(1);
+      windowStart.setHours(0, 0, 0, 0);
+    }
     const sent = await messageRepository.count({
       workspace: workspaceId,
       direction: MessageDirection.OUTBOUND,
       // Failed sends never reached anyone, so they must not consume quota.
       status: { $ne: MessageStatus.FAILED },
-      createdAt: { $gte: startOfMonth },
+      createdAt: { $gte: windowStart },
     });
     return { sent, limit: limits.monthlyMessages, exceeded: sent >= limits.monthlyMessages };
   }

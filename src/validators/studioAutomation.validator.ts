@@ -18,6 +18,20 @@ const repliesSchema = z
   .array(z.string().trim().min(1).max(2000))
   .max(5, 'Up to 5 reply variations');
 
+/** Optional multi-step DM flow config (follow-gate, email, click-to-deliver, follow-up). */
+const flowSchema = z.object({
+  requireFollow: z.boolean().default(false),
+  followMessage: z.string().trim().max(2000).optional(),
+  askEmail: z.boolean().default(false),
+  emailMessage: z.string().trim().max(2000).optional(),
+  deliverOnClick: z.boolean().default(false),
+  openingMessage: z.string().trim().max(2000).optional(),
+  openingButtonLabel: z.string().trim().max(20).optional(),
+  followUpEnabled: z.boolean().default(false),
+  followUpDelayMinutes: z.coerce.number().int().min(1).max(10080).optional(),
+  followUpMessage: z.string().trim().max(2000).optional(),
+});
+
 /** Cross-field rules shared by create and update payloads. */
 function assertStudioRules(
   data: {
@@ -28,6 +42,7 @@ function assertStudioRules(
     keywords?: string[];
     publicReplyEnabled?: boolean;
     publicReplies?: string[];
+    dmEnabled?: boolean;
     dmMessage?: string;
     dmButtons?: Array<{ title: string; url: string }>;
   },
@@ -60,6 +75,17 @@ function assertStudioRules(
       message: 'Add at least one public reply, or turn public replies off',
     });
   }
+  // A DM that's turned on needs a message. (When it's off this stays empty and
+  // the automation is public-reply-only.) The "at least one action" rule is
+  // enforced in the service, where the full merged document is known on update.
+  const dmOn = data.dmEnabled ?? true;
+  if (dmOn && data.dmMessage !== undefined && !data.dmMessage.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['dmMessage'],
+      message: 'Add a DM message, or turn the DM off',
+    });
+  }
   // Meta's button template caps the accompanying text at 640 characters.
   if ((data.dmButtons ?? []).length && (data.dmMessage ?? '').length > 640) {
     ctx.addIssue({
@@ -83,8 +109,10 @@ const createBodySchema = z
     excludeKeywords: keywordListSchema.default([]),
     publicReplyEnabled: z.boolean().default(true),
     publicReplies: repliesSchema.default([]),
-    dmMessage: z.string().trim().min(1).max(2000),
+    dmEnabled: z.boolean().default(true),
+    dmMessage: z.string().trim().max(2000).default(''),
     dmButtons: z.array(buttonSchema).max(3, 'Up to 3 buttons').default([]),
+    flow: flowSchema.optional(),
     oncePerUser: z.boolean().default(false),
     templateKey: z.string().trim().max(60).optional(),
     status: z.nativeEnum(StudioAutomationStatus).optional(),
@@ -104,8 +132,10 @@ const updateBodySchema = z
     excludeKeywords: keywordListSchema.optional(),
     publicReplyEnabled: z.boolean().optional(),
     publicReplies: repliesSchema.optional(),
-    dmMessage: z.string().trim().min(1).max(2000).optional(),
+    dmEnabled: z.boolean().optional(),
+    dmMessage: z.string().trim().max(2000).optional(),
     dmButtons: z.array(buttonSchema).max(3, 'Up to 3 buttons').optional(),
+    flow: flowSchema.optional(),
     oncePerUser: z.boolean().optional(),
     status: z.nativeEnum(StudioAutomationStatus).optional(),
   })

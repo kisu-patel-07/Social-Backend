@@ -1,7 +1,7 @@
 import { Types } from 'mongoose';
 import { AnalyticsDailyModel, IAnalyticsDaily } from '../models/analytics.model';
 import { Platform } from '../constants';
-import { toDateKey } from '../utils/date';
+import { toDateKeyUTC } from '../utils/date';
 import { BaseRepository } from './base.repository';
 
 export type AnalyticsMetric = 'commentsTriggered' | 'dmSent' | 'newLeads' | 'messagesReceived';
@@ -22,7 +22,7 @@ class AnalyticsRepository extends BaseRepository<IAnalyticsDaily> {
     platform?: Platform,
     by = 1
   ): Promise<void> {
-    const dateKey = toDateKey(when);
+    const dateKey = toDateKeyUTC(when);
     const date = new Date(`${dateKey}T00:00:00.000Z`);
     await this.model
       .updateOne(

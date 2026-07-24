@@ -10,6 +10,8 @@ export interface ILead extends Document {
   externalUserId: string;
   username?: string;
   name?: string;
+  /** Email captured via a Studio flow's "ask for email" step, if any. */
+  email?: string;
   /** Profile picture URL cached from the Meta profile API. */
   avatarUrl?: string;
   /** How this contact first entered the workspace (comment automation vs. DM). */
@@ -50,6 +52,7 @@ const leadSchema = new Schema<ILead>(
     externalUserId: { type: String, required: true, index: true },
     username: { type: String, trim: true },
     name: { type: String, trim: true },
+    email: { type: String, trim: true, lowercase: true },
     avatarUrl: { type: String },
     source: {
       type: String,

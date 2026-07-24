@@ -16,6 +16,7 @@ import {
 import { AuthUser } from '../types/auth.types';
 import { PaginatedResult, PaginationOptions } from '../types/common.types';
 import { BadRequestError, ConflictError, NotFoundError } from '../utils/AppError';
+import { containsRegex } from '../utils/text';
 import { activityService } from './activity.service';
 import { analyticsService } from './analytics.service';
 import { assertWithinLimit, subscriptionService } from './subscription.service';
@@ -190,7 +191,7 @@ class AutomationService {
     if (filters.platform) query.platform = filters.platform;
     if (filters.status) query.status = filters.status;
     if (filters.socialAccountId) query.socialAccount = filters.socialAccountId;
-    if (filters.search) query.name = { $regex: filters.search, $options: 'i' };
+    if (filters.search) query.name = containsRegex(filters.search);
 
     return automationRepository.paginate(query, filters, undefined, {
       path: 'socialAccount',

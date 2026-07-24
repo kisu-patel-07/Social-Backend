@@ -1,9 +1,13 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],
-  "crons": [{ "path": "/api/cron/refresh-tokens", "schedule": "0 3 * * *" }],
+  "crons": [
+    { "path": "/api/cron/refresh-tokens", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/flow-followups", "schedule": "*/15 * * * *" }
+  ],
   "functions": {
     "api/index.ts": { "maxDuration": 30 },
-    "api/cron/refresh-tokens.ts": { "maxDuration": 60 }
+    "api/cron/refresh-tokens.ts": { "maxDuration": 60 },
+    "api/cron/flow-followups.ts": { "maxDuration": 60 }
   }
 }

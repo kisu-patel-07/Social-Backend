@@ -28,6 +28,8 @@ import { signAccessToken } from '../utils/jwt';
 import { buildTotpUri, generateTotpSecret, totpQrDataUrl, verifyTotpCode } from '../utils/totp';
 import { CsvColumn, toCsv } from '../utils/csv';
 import { toDateKey } from '../utils/date';
+import { containsRegex } from '../utils/text';
+import { linkTrackingService } from './linkTracking.service';
 import {
   activityLogRepository,
   automationRepository,
@@ -368,8 +370,8 @@ class AdminService {
     if (filters.suspended !== undefined) query.isSuspended = filters.suspended;
     if (filters.search) {
       query.$or = [
-        { name: { $regex: filters.search, $options: 'i' } },
-        { email: { $regex: filters.search, $options: 'i' } },
+        { name: containsRegex(filters.search) },
+        { email: containsRegex(filters.search) },
       ];
     }
     return userRepository.paginate(query, filters, undefined, [
@@ -505,6 +507,7 @@ class AdminService {
       notificationRepository.deleteMany({ workspace: workspaceId }),
       subscriptionRepository.deleteMany({ workspace: workspaceId }),
       studioAutomationRepository.deleteMany({ workspace: workspaceId }),
+      linkTrackingService.deleteByWorkspace(workspaceId.toString()),
     ]);
     await userRepository.deleteMany({ workspace: workspaceId });
     await workspaceRepository.deleteById(workspaceId);
@@ -725,7 +728,7 @@ class AdminService {
     const postUnionMatch: Record<string, unknown> = {};
     if (filters.status) postUnionMatch.status = filters.status;
     if (filters.kind) postUnionMatch.kind = filters.kind;
-    if (filters.search) postUnionMatch.name = { $regex: filters.search, $options: 'i' };
+    if (filters.search) postUnionMatch.name = containsRegex(filters.search);
 
     const pipeline: PipelineStage[] = [
       { $set: { kind: 'classic' } },
@@ -1194,9 +1197,7 @@ class AdminService {
   // ---- Workspace search (feature-flag allowlist picker) -----------------------------
 
   async searchWorkspaces(search?: string): Promise<Array<{ _id: Types.ObjectId; name: string }>> {
-    const query: FilterQuery<IWorkspace> = search
-      ? { name: { $regex: search, $options: 'i' } }
-      : {};
+    const query: FilterQuery<IWorkspace> = search ? { name: containsRegex(search) } : {};
     const workspaces = await workspaceRepository.find(query, 'name', {
       sort: { name: 1 },
       limit: 10,
@@ -1379,7 +1380,7 @@ class AdminService {
     filters: PaginationOptions & { search?: string }
   ): Promise<{ items: AdminWorkspaceRow[]; meta: ReturnType<typeof buildPaginationMeta> }> {
     const pipeline: PipelineStage[] = [
-      ...(filters.search ? [{ $match: { name: { $regex: filters.search, $options: 'i' } } }] : []),
+      ...(filters.search ? [{ $match: { name: containsRegex(filters.search) } }] : []),
       { $sort: { ...filters.sort, _id: 1 as const } },
       {
         $facet: {

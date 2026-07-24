@@ -261,6 +261,55 @@ class MetaClient {
     }
   }
 
+  /**
+   * Send a DM carrying postback buttons (button clicks come back as
+   * messaging_postbacks webhooks, not links). Used to drive multi-step flows —
+   * e.g. a "Send me the link" or "I'm following ✅" button. The recipient is a
+   * `comment_id` for the opening DM from a comment, or a user `id` for later
+   * steps in an existing thread.
+   *
+   * Docs: https://developers.facebook.com/docs/messenger-platform/send-messages/template/button
+   */
+  async sendMessageWithPostbacks(
+    pageId: string,
+    recipient: { comment_id: string } | { id: string },
+    text: string,
+    buttons: Array<{ title: string; payload: string }>,
+    pageAccessToken: string
+  ): Promise<{ id?: string; message_id?: string }> {
+    try {
+      const { data } = await this.http.post<{ id?: string; message_id?: string }>(
+        `/${pageId}/messages`,
+        {
+          recipient,
+          message: {
+            attachment: {
+              type: 'template',
+              payload: {
+                template_type: 'button',
+                text,
+                buttons: buttons.map((b) => ({
+                  type: 'postback',
+                  title: b.title,
+                  payload: b.payload,
+                })),
+              },
+            },
+          },
+        },
+        {
+          params: {
+            access_token: pageAccessToken,
+            appsecret_proof: this.appSecretProof(pageAccessToken),
+          },
+        }
+      );
+      return data;
+    } catch (error) {
+      this.handleError('sendMessageWithPostbacks', error);
+    }
+  }
+
   /** Send a direct message to a user via the Send API (manual inbox replies). */
   async sendDirectMessage(
     pageId: string,

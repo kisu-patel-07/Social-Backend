@@ -67,6 +67,17 @@ export interface IncomingComment {
   createdTime?: Date;
 }
 
+/** Normalized representation of a button-click (postback) webhook event. */
+export interface IncomingPostback {
+  platform: Platform;
+  accountExternalId: string;
+  fromId: string;
+  /** The button's postback payload (our flow encodes routing into this). */
+  payload: string;
+  title?: string;
+  createdTime?: Date;
+}
+
 /** Normalized representation of an inbound direct message webhook event. */
 export interface IncomingMessage {
   platform: Platform;

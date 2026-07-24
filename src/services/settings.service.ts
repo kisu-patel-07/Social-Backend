@@ -8,6 +8,7 @@ import {
   messageRepository,
   notificationRepository,
   socialAccountRepository,
+  studioAutomationRepository,
   subscriptionRepository,
   userRepository,
   workspaceRepository,
@@ -15,6 +16,7 @@ import {
 import { AuthUser } from '../types/auth.types';
 import { BadRequestError, NotFoundError } from '../utils/AppError';
 import { comparePassword, hashPassword } from '../utils/password';
+import { linkTrackingService } from './linkTracking.service';
 
 interface ProfileUpdate {
   name?: string;
@@ -128,6 +130,7 @@ class SettingsService {
     // Cascade delete all workspace-scoped data.
     await Promise.all([
       automationRepository.deleteMany({ workspace: workspaceId }),
+      studioAutomationRepository.deleteMany({ workspace: workspaceId }),
       keywordRepository.deleteMany({ workspace: workspaceId }),
       messageRepository.deleteMany({ workspace: workspaceId }),
       conversationRepository.deleteMany({ workspace: workspaceId }),
@@ -135,6 +138,7 @@ class SettingsService {
       socialAccountRepository.deleteMany({ workspace: workspaceId }),
       notificationRepository.deleteMany({ workspace: workspaceId }),
       subscriptionRepository.deleteMany({ workspace: workspaceId }),
+      linkTrackingService.deleteByWorkspace(workspaceId),
     ]);
     await userRepository.deleteMany({ workspace: workspaceId });
     await workspaceRepository.deleteById(workspaceId);

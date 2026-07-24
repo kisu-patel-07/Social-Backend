@@ -18,6 +18,18 @@ export interface IMessage extends Document {
   text: string;
   /** External Meta object id (comment id / message id) for idempotency. */
   externalId?: string;
+  /**
+   * Idempotency key for an automated OUTBOUND send, e.g.
+   * `cdm:<account>:<comment>:<automation>`. A webhook retry reuses the same
+   * record instead of sending a duplicate. Unique (sparse).
+   */
+  dedupeKey?: string;
+  /**
+   * Set on an INBOUND event once its automation processing has fully completed.
+   * A record that exists without this marker is a crashed-mid-flight attempt and
+   * is safe to reprocess (sends are idempotent via dedupeKey).
+   */
+  automationHandledAt?: Date;
   /** For comments: the post/media the comment belongs to. */
   postId?: string;
   /** If sent by an automation, which one. */
@@ -54,6 +66,8 @@ const messageSchema = new Schema<IMessage>(
     toId: { type: String },
     text: { type: String, default: '' },
     externalId: { type: String, index: true, sparse: true },
+    dedupeKey: { type: String },
+    automationHandledAt: { type: Date },
     postId: { type: String },
     automation: { type: Schema.Types.ObjectId, ref: 'Automation' },
     isAutomated: { type: Boolean, default: false },
@@ -69,6 +83,12 @@ messageSchema.index({ workspace: 1, type: 1, createdAt: -1 });
 messageSchema.index(
   { socialAccount: 1, externalId: 1 },
   { unique: true, partialFilterExpression: { externalId: { $exists: true } } }
+);
+// One automated send per idempotency key (comment/DM reply) — a webhook retry
+// re-uses the existing record instead of sending a duplicate.
+messageSchema.index(
+  { dedupeKey: 1 },
+  { unique: true, partialFilterExpression: { dedupeKey: { $exists: true } } }
 );
 
 export const MessageModel = model<IMessage>('Message', messageSchema);

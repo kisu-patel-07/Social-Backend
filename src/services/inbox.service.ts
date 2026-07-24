@@ -1,4 +1,5 @@
 import { FilterQuery } from 'mongoose';
+import { containsRegex } from '../utils/text';
 import {
   ActivityAction,
   ConversationStatus,
@@ -43,8 +44,8 @@ class InboxService {
     if (filters.socialAccountId) query.socialAccount = filters.socialAccountId;
     if (filters.search) {
       query.$or = [
-        { participantUsername: { $regex: filters.search, $options: 'i' } },
-        { participantName: { $regex: filters.search, $options: 'i' } },
+        { participantUsername: containsRegex(filters.search) },
+        { participantName: containsRegex(filters.search) },
       ];
     }
     // Always sort the inbox by most-recent activity.
@@ -67,8 +68,8 @@ class InboxService {
     if (filters.socialAccountId) query.socialAccount = filters.socialAccountId;
     if (filters.search) {
       query.$or = [
-        { text: { $regex: filters.search, $options: 'i' } },
-        { fromUsername: { $regex: filters.search, $options: 'i' } },
+        { text: containsRegex(filters.search) },
+        { fromUsername: containsRegex(filters.search) },
       ];
     }
     return messageRepository.paginate(query, { ...filters, sort: { createdAt: -1 } }, undefined, {

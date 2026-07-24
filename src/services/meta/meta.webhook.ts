@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { env } from '../../config/env';
 import { Platform } from '../../constants';
-import { IncomingComment, IncomingMessage } from './meta.types';
+import { IncomingComment, IncomingMessage, IncomingPostback } from './meta.types';
 
 /**
  * Verify the X-Hub-Signature-256 header Meta sends with every webhook POST.
@@ -32,6 +32,7 @@ export function verifyWebhookChallenge(
 interface ParsedEvents {
   comments: IncomingComment[];
   messages: IncomingMessage[];
+  postbacks: IncomingPostback[];
 }
 
 /**
@@ -41,6 +42,7 @@ interface ParsedEvents {
 export function parseWebhookPayload(payload: unknown): ParsedEvents {
   const comments: IncomingComment[] = [];
   const messages: IncomingMessage[] = [];
+  const postbacks: IncomingPostback[] = [];
 
   const body = payload as {
     object?: string;
@@ -52,7 +54,7 @@ export function parseWebhookPayload(payload: unknown): ParsedEvents {
     }>;
   };
 
-  if (!body?.entry?.length) return { comments, messages };
+  if (!body?.entry?.length) return { comments, messages, postbacks };
 
   const platform = body.object === 'instagram' ? Platform.INSTAGRAM : Platform.FACEBOOK;
 
@@ -88,6 +90,18 @@ export function parseWebhookPayload(payload: unknown): ParsedEvents {
     // Direct message events (Messenger / IG messaging).
     for (const m of entry.messaging ?? []) {
       const msg = m as Record<string, any>;
+      // Button-click (postback) events drive multi-step DM flows.
+      if (msg.postback?.payload) {
+        postbacks.push({
+          platform,
+          accountExternalId,
+          fromId: (msg.sender?.id || '') as string,
+          payload: msg.postback.payload as string,
+          title: msg.postback.title as string | undefined,
+          createdTime: msg.timestamp ? new Date(Number(msg.timestamp)) : undefined,
+        });
+        continue;
+      }
       if (!msg.message?.mid) continue;
       messages.push({
         platform,
@@ -109,5 +123,5 @@ export function parseWebhookPayload(payload: unknown): ParsedEvents {
     }
   }
 
-  return { comments, messages };
+  return { comments, messages, postbacks };
 }

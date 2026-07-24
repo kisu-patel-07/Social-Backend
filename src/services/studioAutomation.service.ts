@@ -7,9 +7,10 @@ import {
   StudioKeywordMode,
   StudioPostScope,
 } from '../constants';
-import { IStudioAutomation, IStudioButton } from '../models/studioAutomation.model';
+import { IStudioAutomation, IStudioButton, IStudioFlow } from '../models/studioAutomation.model';
 import { automationRepository, socialAccountRepository } from '../repositories';
 import { studioAutomationRepository } from '../repositories/studioAutomation.repository';
+import { containsRegex } from '../utils/text';
 import { AuthUser } from '../types/auth.types';
 import { PaginatedResult, PaginationOptions } from '../types/common.types';
 import { BadRequestError, NotFoundError } from '../utils/AppError';
@@ -28,8 +29,10 @@ interface StudioAutomationParams {
   excludeKeywords: string[];
   publicReplyEnabled: boolean;
   publicReplies: string[];
+  dmEnabled: boolean;
   dmMessage: string;
   dmButtons: IStudioButton[];
+  flow?: IStudioFlow;
   oncePerUser: boolean;
   templateKey?: string;
   status?: StudioAutomationStatus;
@@ -64,6 +67,8 @@ class StudioAutomationService {
     postIds: string[];
     publicReplyEnabled: boolean;
     publicReplies: string[];
+    dmEnabled: boolean;
+    dmMessage: string;
   }): void {
     // Story mentions carry no text — keyword matching does not apply.
     if (
@@ -80,6 +85,23 @@ class StudioAutomationService {
     }
     if (doc.publicReplyEnabled && !doc.publicReplies.length) {
       throw new BadRequestError('Add a public reply (or disable public replies) before going live');
+    }
+
+    // Each action is independently optional (ManyChat-style), but a live
+    // automation must do at least one thing.
+    const isComment = (doc.triggerType ?? AutomationTrigger.COMMENT) === AutomationTrigger.COMMENT;
+    const publicOn = doc.publicReplyEnabled && doc.publicReplies.length > 0;
+    if (!doc.dmEnabled && !publicOn) {
+      throw new BadRequestError(
+        'Turn on a public reply or a DM — an automation must do at least one thing'
+      );
+    }
+    // A DM-/story-triggered automation can only respond with a DM.
+    if (!isComment && !doc.dmEnabled) {
+      throw new BadRequestError('This trigger can only reply with a DM — keep the DM enabled');
+    }
+    if (doc.dmEnabled && !doc.dmMessage.trim()) {
+      throw new BadRequestError('Add a DM message, or turn the DM off, before going live');
     }
   }
 
@@ -112,9 +134,10 @@ class StudioAutomationService {
       excludeKeywords: this.normalizeKeywords(params.excludeKeywords),
       publicReplyEnabled: params.publicReplyEnabled,
       publicReplies: params.publicReplies,
+      dmEnabled: params.dmEnabled,
     };
     if (candidate.status === StudioAutomationStatus.ACTIVE) {
-      this.assertReadyToActivate(candidate);
+      this.assertReadyToActivate({ ...candidate, dmMessage: params.dmMessage });
     }
 
     const automation = await studioAutomationRepository.create({
@@ -125,6 +148,7 @@ class StudioAutomationService {
       ...candidate,
       dmMessage: params.dmMessage,
       dmButtons: params.dmButtons,
+      flow: params.flow,
       oncePerUser: params.oncePerUser,
       templateKey: params.templateKey,
       createdBy: new Types.ObjectId(user.id),
@@ -150,7 +174,7 @@ class StudioAutomationService {
     if (filters.platform) query.platform = filters.platform;
     if (filters.status) query.status = filters.status;
     if (filters.socialAccountId) query.socialAccount = filters.socialAccountId;
-    if (filters.search) query.name = { $regex: filters.search, $options: 'i' };
+    if (filters.search) query.name = containsRegex(filters.search);
 
     return studioAutomationRepository.paginate(query, filters, undefined, {
       path: 'socialAccount',
@@ -188,6 +212,8 @@ class StudioAutomationService {
         : existing.excludeKeywords,
       publicReplyEnabled: params.publicReplyEnabled ?? existing.publicReplyEnabled,
       publicReplies: params.publicReplies ?? existing.publicReplies,
+      dmEnabled: params.dmEnabled ?? existing.dmEnabled,
+      dmMessage: params.dmMessage ?? existing.dmMessage,
     };
     if (merged.status === StudioAutomationStatus.ACTIVE) {
       this.assertReadyToActivate(merged);
@@ -209,8 +235,10 @@ class StudioAutomationService {
         ? { publicReplyEnabled: params.publicReplyEnabled }
         : {}),
       ...(params.publicReplies !== undefined ? { publicReplies: params.publicReplies } : {}),
+      ...(params.dmEnabled !== undefined ? { dmEnabled: params.dmEnabled } : {}),
       ...(params.dmMessage !== undefined ? { dmMessage: params.dmMessage } : {}),
       ...(params.dmButtons !== undefined ? { dmButtons: params.dmButtons } : {}),
+      ...(params.flow !== undefined ? { flow: params.flow } : {}),
       ...(params.oncePerUser !== undefined ? { oncePerUser: params.oncePerUser } : {}),
       ...(params.status !== undefined ? { status: params.status } : {}),
     });

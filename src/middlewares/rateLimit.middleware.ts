@@ -1,6 +1,7 @@
 import rateLimit from 'express-rate-limit';
 import { env } from '../config/env';
 import { HttpStatus } from '../constants/httpStatus';
+import { MongoRateLimitStore } from './mongoRateLimitStore';
 
 /** General API limiter applied to all routes. */
 export const apiLimiter = rateLimit({
@@ -22,10 +23,15 @@ export const apiLimiter = rateLimit({
   skip: (req) => req.originalUrl.includes('/webhooks/meta'),
 });
 
-/** Stricter limiter for sensitive auth endpoints (login, register, reset). */
+/**
+ * Stricter limiter for sensitive auth endpoints (login, register, reset).
+ * Uses a shared Mongo store so the brute-force limit holds across all serverless
+ * instances — the default in-memory store would reset per lambda and be useless.
+ */
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
+  store: new MongoRateLimitStore(),
   standardHeaders: true,
   legacyHeaders: false,
   message: {

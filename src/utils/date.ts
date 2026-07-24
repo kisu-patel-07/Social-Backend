@@ -26,12 +26,35 @@ export function daysAgo(days: number): Date {
   return addDays(new Date(), -days);
 }
 
-/** Format a date as YYYY-MM-DD (UTC-agnostic, local time). */
+/** Format a date as YYYY-MM-DD in local time (used for display/filenames). */
 export function toDateKey(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+/** Start of the UTC day (00:00:00.000Z). */
+export function startOfDayUTC(date: Date): Date {
+  const d = new Date(date);
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
+
+/** End of the UTC day (23:59:59.999Z). */
+export function endOfDayUTC(date: Date): Date {
+  const d = new Date(date);
+  d.setUTCHours(23, 59, 59, 999);
+  return d;
+}
+
+/**
+ * Format a date as YYYY-MM-DD in UTC. Analytics buckets key on this so writes
+ * and range reads agree regardless of the server's timezone (see
+ * analytics.repository — the stored `date` is UTC midnight).
+ */
+export function toDateKeyUTC(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 /** Format a date as YYYY-MM (month key) for monthly aggregations. */
