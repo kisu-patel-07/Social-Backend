@@ -1,7 +1,23 @@
 import dotenv from 'dotenv';
 import { z } from 'zod';
 
+// Load an environment-specific file first (.env.production / .env.development /
+// .env.test), then the shared .env as a fallback. dotenv never overwrites a
+// variable that is already set, so precedence works out to:
+//   real host/shell env  >  .env.<NODE_ENV>  >  .env
+// This lets a hosting platform's dashboard variables always win, and lets you
+// target a specific environment for a one-off command locally, e.g.:
+//   NODE_ENV=production npm run seed:plans
+const nodeEnv = process.env.NODE_ENV ?? 'development';
+const envFileResult = dotenv.config({ path: `.env.${nodeEnv}` });
 dotenv.config();
+
+/**
+ * Which env file supplied the environment-specific values, for a clear boot log.
+ * `.env.<NODE_ENV>` when that file exists; otherwise only the shared `.env` was
+ * used. (`.env` is always loaded as a fallback regardless.)
+ */
+export const loadedEnvFile = envFileResult.error ? '.env (only)' : `.env.${nodeEnv} + .env`;
 
 /**
  * Centralized, validated environment configuration.

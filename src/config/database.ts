@@ -18,7 +18,9 @@ export async function connectDatabase(): Promise<typeof mongoose> {
       autoIndex: !isProduction, // build indexes automatically outside production
       serverSelectionTimeoutMS: 10000,
     });
-    logger.info(`✅ MongoDB connected: ${conn.connection.host}/${conn.connection.name}`);
+    logger.info(
+      `✅ MongoDB connected [${env.NODE_ENV}]: ${conn.connection.host}/${conn.connection.name}`
+    );
     return conn;
   } catch (error) {
     logger.error('❌ MongoDB connection error', { error });

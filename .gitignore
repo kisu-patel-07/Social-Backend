@@ -15,6 +15,9 @@ coverage/
 .env.local
 .env
 .env.example
+.env.development
+.env.production
+.env.test
 
 # Ignore package-lock.json to avoid conflicts between different environments
 package-lock.json
