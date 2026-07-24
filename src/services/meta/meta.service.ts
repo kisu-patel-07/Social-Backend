@@ -37,6 +37,28 @@ class MetaService {
     const longLived = await metaClient.getLongLivedToken(shortLived.access_token);
     const pages = await metaClient.getUserPages(longLived.access_token);
 
+    // TEMP DIAGNOSTIC: reveal exactly what Meta returned so we can see whether an
+    // Instagram Business account is attached to each Page, and which scopes the
+    // user actually granted at consent. Remove once the IG-connect issue is resolved.
+    try {
+      const tokenInfo = await metaClient.debugToken(longLived.access_token);
+      logger.info('[META DIAG] granted scopes', { scopes: tokenInfo.scopes });
+    } catch (error) {
+      logger.warn('[META DIAG] could not inspect token scopes', {
+        error: (error as Error).message,
+      });
+    }
+    logger.info('[META DIAG] pages returned by /me/accounts', {
+      count: pages.length,
+      pages: pages.map((p) => ({
+        id: p.id,
+        name: p.name,
+        hasInstagram: Boolean(p.instagram_business_account?.id),
+        instagramBusinessId: p.instagram_business_account?.id,
+        instagramUsername: p.instagram_business_account?.username,
+      })),
+    });
+
     const accounts: ConnectableAccount[] = [];
     for (const page of pages) {
       // Facebook Page entity.
