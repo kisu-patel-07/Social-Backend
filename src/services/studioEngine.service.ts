@@ -119,6 +119,10 @@ class StudioEngineService {
       logger.info('Studio DM automation skipped: subscription inactive', {
         workspace: account.workspace.toString(),
       });
+      void subscriptionService.notifyAutomationsPaused(
+        account.workspace.toString(),
+        'subscription'
+      );
       return false;
     }
     const quota = await subscriptionService.getMessageQuota(account.workspace.toString());
@@ -127,6 +131,7 @@ class StudioEngineService {
         workspace: account.workspace.toString(),
         limit: quota.limit,
       });
+      void subscriptionService.notifyAutomationsPaused(account.workspace.toString(), 'quota');
       return false;
     }
 

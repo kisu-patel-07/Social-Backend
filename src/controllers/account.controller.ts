@@ -62,8 +62,11 @@ export const accountController = {
     }
 
     try {
-      const { connected } = await accountService.connectFromCallback(state, code);
-      return res.redirect(`${clientOrigin}/accounts?connected=${connected}`);
+      const { connected, failed } = await accountService.connectFromCallback(state, code);
+      // Carry the failure reason (plan limit, duplicate, ...) so the frontend
+      // can tell the user why some accounts didn't connect.
+      const failedParam = failed ? `&failed=${encodeURIComponent(failed)}` : '';
+      return res.redirect(`${clientOrigin}/accounts?connected=${connected}${failedParam}`);
     } catch (error) {
       logger.error('OAuth callback failed', { error: (error as Error).message });
       return res.redirect(`${clientOrigin}/accounts?error=connect_failed`);

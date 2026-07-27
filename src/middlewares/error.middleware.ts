@@ -36,12 +36,14 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
     details = Object.fromEntries(Object.entries(err.errors).map(([k, v]) => [k, v.message]));
   } else if (err instanceof mongoose.Error.CastError) {
     statusCode = HttpStatus.BAD_REQUEST;
-    message = `Invalid value for "${err.path}"`;
+    message = 'This link looks out of date. Refresh the page and try again.';
     errorCode = 'CAST_ERROR';
   } else if ((err as MongoServerError)?.code === 11000) {
     statusCode = HttpStatus.CONFLICT;
     const keys = Object.keys((err as MongoServerError).keyValue ?? {});
-    message = `Duplicate value for: ${keys.join(', ')}`;
+    message = keys.length
+      ? `That ${keys.join(', ')} is already in use. Try a different one.`
+      : 'This already exists. Try a different value.';
     errorCode = 'DUPLICATE_KEY';
     details = (err as MongoServerError).keyValue;
   } else if (err instanceof Error) {

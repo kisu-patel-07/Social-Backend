@@ -64,10 +64,10 @@ export function verifyEmailToken(
   try {
     decoded = jwt.verify(token, env.JWT_EMAIL_SECRET) as EmailTokenPayload;
   } catch {
-    throw new UnauthorizedError('Invalid or expired token');
+    throw new UnauthorizedError('This link is no longer valid. Request a new one.');
   }
   if (decoded.type !== expectedType) {
-    throw new UnauthorizedError('Token type mismatch');
+    throw new UnauthorizedError('This link is not valid. Request a new one.');
   }
   return decoded;
 }

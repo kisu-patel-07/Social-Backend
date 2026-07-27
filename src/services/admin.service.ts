@@ -572,7 +572,7 @@ class AdminService {
       changes.push(`extended ${params.extendDays} day(s)`);
     }
     if (changes.length === 0) {
-      throw new BadRequestError('Nothing to update');
+      throw new BadRequestError('There are no changes to save.');
     }
 
     const updated = await subscriptionRepository.updateById(subscription._id, { $set: set });
@@ -671,7 +671,7 @@ class AdminService {
 
   async createPlan(actor: AuthUser, params: PlanParams): Promise<IPlan> {
     if (!params.code || !params.name || params.priceAmount === undefined) {
-      throw new BadRequestError('code, name and priceAmount are required');
+      throw new BadRequestError('Please fill in the code, name, and a valid price.');
     }
     const existing = await planRepository.findOne({ code: params.code.toLowerCase() });
     if (existing) throw new ConflictError(`A plan with code "${params.code}" already exists`);
@@ -941,7 +941,9 @@ class AdminService {
     const account = await socialAccountRepository.findWithToken(id);
     if (!account) throw new NotFoundError('Connected account not found');
     if (!account.pageId) {
-      throw new BadRequestError('This account has no linked Page to subscribe.');
+      throw new BadRequestError(
+        "This account has no linked Facebook Page, so notifications can't be set up. Reconnect it and try again."
+      );
     }
 
     try {

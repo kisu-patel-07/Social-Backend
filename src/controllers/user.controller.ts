@@ -1,11 +1,9 @@
 import { Request, Response } from 'express';
-import { MessageDirection } from '../constants';
 import { featureService, settingsService, subscriptionService } from '../services';
 import { adminService } from '../services/admin.service';
 import { paymentService } from '../services/payment.service';
 import {
   automationRepository,
-  messageRepository,
   socialAccountRepository,
   studioAutomationRepository,
 } from '../repositories';
@@ -16,9 +14,6 @@ export const userController = {
   /** Return the authenticated user, their workspace, subscription, flags and usage. */
   me: asyncHandler(async (req: Request, res: Response) => {
     const user = req.user!;
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
 
     const [
       profile,
@@ -30,7 +25,7 @@ export const userController = {
       connectedAccounts,
       classicAutomations,
       studioAutomations,
-      messagesThisMonth,
+      messageQuota,
     ] = await Promise.all([
       settingsService.getProfile(user.id),
       settingsService.getWorkspace(user.workspaceId),
@@ -41,11 +36,9 @@ export const userController = {
       socialAccountRepository.countActiveByWorkspace(user.workspaceId),
       automationRepository.count({ workspace: user.workspaceId }),
       studioAutomationRepository.count({ workspace: user.workspaceId }),
-      messageRepository.count({
-        workspace: user.workspaceId,
-        direction: MessageDirection.OUTBOUND,
-        createdAt: { $gte: startOfMonth },
-      }),
+      // Same counter the enforcement gate uses (billing-period window, failed
+      // sends excluded) so the meter never disagrees with when blocking starts.
+      subscriptionService.getMessageQuota(user.workspaceId),
     ]);
 
     // A feature is usable only when the admin flag AND the plan both allow it.
@@ -64,7 +57,7 @@ export const userController = {
       usage: {
         connectedAccounts,
         automations: classicAutomations + studioAutomations,
-        messagesThisMonth,
+        messagesThisMonth: messageQuota.sent,
       },
       // Whether Razorpay checkout is available (falls back to request-upgrade).
       paymentsEnabled: paymentService.isConfigured(),

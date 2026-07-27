@@ -205,6 +205,54 @@ class SubscriptionService {
   }
 
   /**
+   * Bell-notify the owner that automated replies are paused (monthly quota
+   * spent, or the subscription lapsed). The webhook pipeline calls this on
+   * every skipped event, so it dedupes to one notification per cause per 24h.
+   * Best-effort: must never break event processing.
+   */
+  async notifyAutomationsPaused(
+    workspaceId: string,
+    cause: 'quota' | 'subscription'
+  ): Promise<void> {
+    try {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const already = await notificationRepository.count({
+        workspace: workspaceId,
+        'metadata.kind': 'automation_paused',
+        'metadata.cause': cause,
+        createdAt: { $gte: since },
+      });
+      if (already > 0) return;
+
+      const workspace = await workspaceRepository.findById(workspaceId);
+      if (!workspace?.owner) return;
+
+      let body =
+        'Your subscription is inactive, so automated replies are paused. Choose a plan in Billing to resume.';
+      if (cause === 'quota') {
+        const quota = await this.getMessageQuota(workspaceId);
+        body = `You've used all ${quota.limit} replies included in your plan this month, so automated replies are paused. Upgrade your plan to resume them.`;
+      }
+
+      await notificationRepository.create({
+        workspace: workspace._id,
+        user: workspace.owner,
+        type: NotificationType.SYSTEM,
+        title: 'Automated replies are paused',
+        body,
+        link: '/billing',
+        metadata: { kind: 'automation_paused', cause },
+      });
+    } catch (err) {
+      logger.warn('Failed to create automation-paused notification', {
+        workspaceId,
+        cause,
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  /**
    * Resolve the workspace's current limits + feature entitlements from its
    * plan, including any admin-granted bonus on top (unlimited stays unlimited).
    */
@@ -219,11 +267,14 @@ class SubscriptionService {
       // so it surfaces in monitoring/admin instead of degrading quietly. Run
       // `npm run subs:check` to list every affected subscription.
       if (subscription) {
-        logger.error('Subscription plan reference did not resolve — serving fallback entitlements', {
-          workspaceId,
-          subscriptionId: String(subscription._id),
-          status: subscription.status,
-        });
+        logger.error(
+          'Subscription plan reference did not resolve — serving fallback entitlements',
+          {
+            workspaceId,
+            subscriptionId: String(subscription._id),
+            status: subscription.status,
+          }
+        );
       }
       // No plan resolved. Stay permissive in unseeded dev; in production fail
       // SAFE to the real Free plan (or a conservative floor) so a missing

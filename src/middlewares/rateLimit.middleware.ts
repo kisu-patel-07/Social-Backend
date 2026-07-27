@@ -11,7 +11,7 @@ export const apiLimiter = rateLimit({
   legacyHeaders: false,
   message: {
     success: false,
-    message: 'Too many requests, please try again later.',
+    message: "You're doing that a little too fast. Wait a minute, then try again.",
     errorCode: 'RATE_LIMITED',
   },
   statusCode: HttpStatus.TOO_MANY_REQUESTS,
@@ -36,7 +36,7 @@ export const authLimiter = rateLimit({
   legacyHeaders: false,
   message: {
     success: false,
-    message: 'Too many attempts, please try again later.',
+    message: "You've tried that a few too many times. Wait a minute, then try again.",
     errorCode: 'RATE_LIMITED',
   },
   statusCode: HttpStatus.TOO_MANY_REQUESTS,

@@ -121,10 +121,14 @@ class InboxService {
       conversation.socialAccount.toString()
     );
     if (!account || !account.isActive) {
-      throw new BadRequestError('The connected account for this conversation is unavailable');
+      throw new BadRequestError(
+        'The Instagram account for this conversation is disconnected. Reconnect it from the Accounts page to reply.'
+      );
     }
     if (!account.pageId) {
-      throw new BadRequestError('Account is missing a page id required to send messages');
+      throw new BadRequestError(
+        "This account isn't fully connected, so replies can't be sent. Reconnect it from the Accounts page."
+      );
     }
 
     // Meta only accepts free-form DMs within 24h of the contact's last
@@ -203,12 +207,16 @@ class InboxService {
     });
     if (!comment) throw new NotFoundError('Comment not found');
     if (!comment.externalId) {
-      throw new BadRequestError('Comment is missing its external id and cannot be replied to');
+      throw new BadRequestError(
+        "This comment can't be replied to anymore. It may have been deleted on Instagram."
+      );
     }
 
     const account = await socialAccountRepository.findWithToken(comment.socialAccount.toString());
     if (!account || !account.isActive) {
-      throw new BadRequestError('The connected account for this comment is unavailable');
+      throw new BadRequestError(
+        'The Instagram account for this comment is disconnected. Reconnect it from the Accounts page to reply.'
+      );
     }
 
     // Record the outbound reply as pending, then attempt delivery.

@@ -4,7 +4,7 @@ import { logger } from '../config/logger';
 import { ISocialAccount } from '../models/socialAccount.model';
 import { socialAccountRepository, userRepository } from '../repositories';
 import { AuthUser } from '../types/auth.types';
-import { BadRequestError, ConflictError, NotFoundError } from '../utils/AppError';
+import { AppError, BadRequestError, ConflictError, NotFoundError } from '../utils/AppError';
 import { signStateToken, verifyStateToken } from '../utils/jwt';
 import { activityService } from './activity.service';
 import { analyticsService } from './analytics.service';
@@ -47,7 +47,7 @@ class AccountService {
   async connectFromCallback(
     state: string,
     code: string
-  ): Promise<{ connected: number; total: number }> {
+  ): Promise<{ connected: number; total: number; failed?: string }> {
     const { userId, workspaceId } = verifyStateToken(state);
     const userDoc = await userRepository.findById(userId);
     if (!userDoc) throw new NotFoundError('User not found');
@@ -61,6 +61,7 @@ class AccountService {
 
     const connectable = await metaService.resolveConnectableAccounts(code);
     let connected = 0;
+    let failed: string | undefined;
 
     for (const acc of connectable) {
       try {
@@ -75,7 +76,15 @@ class AccountService {
         connected += 1;
       } catch (error) {
         // Already-connected accounts (ConflictError) and per-account failures
-        // shouldn't abort the whole callback — log and continue.
+        // shouldn't abort the whole callback — log, remember why for the
+        // redirect (limit problems outrank duplicates), and continue.
+        const code_ =
+          error instanceof AppError && error.errorCode === 'PLAN_LIMIT_REACHED'
+            ? 'plan_limit_reached'
+            : error instanceof AppError && error.errorCode === 'CONFLICT'
+              ? 'already_connected'
+              : 'connect_failed';
+        if (failed !== 'plan_limit_reached') failed = code_;
         logger.warn('Skipped connecting an account during OAuth callback', {
           platform: acc.platform,
           name: acc.name,
@@ -84,7 +93,7 @@ class AccountService {
       }
     }
 
-    return { connected, total: connectable.length };
+    return { connected, total: connectable.length, failed };
   }
 
   list(workspaceId: string): Promise<ISocialAccount[]> {
@@ -115,7 +124,9 @@ class AccountService {
 
     const full = await socialAccountRepository.findWithToken(account.id);
     if (!full?.accessToken) {
-      throw new BadRequestError('This account has no valid access token — please reconnect it.');
+      throw new BadRequestError(
+        "This account's Instagram connection has expired. Reconnect it from the Accounts page."
+      );
     }
 
     const page = await metaClient.getMedia(account.instagramBusinessId, full.accessToken, {
@@ -167,10 +178,14 @@ class AccountService {
     assertWithinLimit(activeCount, limits.connectedAccounts, 'connected account(s)');
 
     if (params.platform === Platform.INSTAGRAM && !params.instagramBusinessId) {
-      throw new BadRequestError('instagramBusinessId is required for Instagram accounts');
+      throw new BadRequestError(
+        "This Instagram profile isn't a Business or Creator account, so it can't be connected. Switch it in the Instagram app and try again."
+      );
     }
     if (!params.pageId && !params.instagramBusinessId) {
-      throw new BadRequestError('A pageId or instagramBusinessId is required');
+      throw new BadRequestError(
+        "Instagram didn't share enough details about this account. Try connecting it again."
+      );
     }
 
     const duplicate = await socialAccountRepository.findOne({
@@ -253,9 +268,11 @@ class AccountService {
           ? JSON.stringify(detail).slice(0, 280)
           : (error as Error).message;
       logger.warn('Webhook subscription failed', { accountId, pageId, reason });
+      // Shown on the account card — keep it plain; the raw reason is in the logs.
       await socialAccountRepository.updateById(accountId, {
         isWebhookSubscribed: false,
-        lastError: `Webhook subscription failed: ${reason}`,
+        lastError:
+          'Instagram notifications aren\'t set up yet, so automations can\'t hear new comments or DMs. Use "Retry webhook" or reconnect this account.',
       });
       return false;
     }
@@ -265,14 +282,18 @@ class AccountService {
   async retryWebhookSubscription(user: AuthUser, id: string): Promise<ISocialAccount> {
     const account = await this.getById(user.workspaceId, id);
     if (!account.pageId) {
-      throw new BadRequestError('This account has no linked Page to subscribe.');
+      throw new BadRequestError(
+        "This account has no linked Facebook Page, so notifications can't be set up. Reconnect it and try again."
+      );
     }
     // getById excludes the access token (schema `select: false`), so load it
     // explicitly — otherwise trySubscribeWebhook receives undefined and the
     // appsecret_proof step throws, so the retry could never succeed.
     const full = await socialAccountRepository.findWithToken(account.id);
     if (!full?.accessToken) {
-      throw new BadRequestError('This account has no valid access token — please reconnect it.');
+      throw new BadRequestError(
+        "This account's Instagram connection has expired. Reconnect it from the Accounts page."
+      );
     }
     await this.trySubscribeWebhook(account.id, account.pageId, full.accessToken);
     return this.getById(user.workspaceId, id);

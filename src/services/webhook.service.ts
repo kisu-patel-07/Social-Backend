@@ -215,6 +215,10 @@ class WebhookService {
         reason: access.reason,
         commentId: comment.commentId,
       });
+      void subscriptionService.notifyAutomationsPaused(
+        account.workspace.toString(),
+        'subscription'
+      );
       await markHandled();
       return;
     }
@@ -227,6 +231,7 @@ class WebhookService {
         limit: quota.limit,
         commentId: comment.commentId,
       });
+      void subscriptionService.notifyAutomationsPaused(account.workspace.toString(), 'quota');
       await markHandled();
       return;
     }
@@ -648,6 +653,10 @@ class WebhookService {
       logger.info('DM automation skipped: subscription inactive', {
         workspace: account.workspace.toString(),
       });
+      void subscriptionService.notifyAutomationsPaused(
+        account.workspace.toString(),
+        'subscription'
+      );
       return;
     }
     const dmQuota = await subscriptionService.getMessageQuota(account.workspace.toString());
@@ -656,6 +665,7 @@ class WebhookService {
         workspace: account.workspace.toString(),
         limit: dmQuota.limit,
       });
+      void subscriptionService.notifyAutomationsPaused(account.workspace.toString(), 'quota');
       return;
     }
 
@@ -740,6 +750,7 @@ class WebhookService {
     const aiQuota = await subscriptionService.getMessageQuota(workspaceId);
     if (aiQuota.exceeded) {
       logger.info('AI reply skipped: monthly reply limit reached', { workspace: workspaceId });
+      void subscriptionService.notifyAutomationsPaused(workspaceId, 'quota');
       return;
     }
 

@@ -26,7 +26,15 @@ export function validate(schema: AnyZodObject) {
       next();
     } catch (err) {
       if (err instanceof ZodError) {
-        next(new ValidationError('Validation failed', err.flatten().fieldErrors));
+        // Key errors by the real field name ("keywords", "email"), not by the
+        // wrapper segment ("body") that flatten() would collapse them into —
+        // the client shows these next to the offending input.
+        const fieldErrors: Record<string, string[]> = {};
+        for (const issue of err.issues) {
+          const field = issue.path.slice(1).join('.') || String(issue.path[0] ?? 'request');
+          (fieldErrors[field] ??= []).push(issue.message);
+        }
+        next(new ValidationError('Validation failed', fieldErrors));
         return;
       }
       next(err);

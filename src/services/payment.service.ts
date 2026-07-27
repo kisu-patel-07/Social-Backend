@@ -115,7 +115,9 @@ class PaymentService {
       expected.length === signature.length &&
       crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
     if (!valid) {
-      throw new BadRequestError('Payment verification failed — signature mismatch');
+      throw new BadRequestError(
+        "We couldn't confirm this payment. If money left your account, contact support and we'll make it right."
+      );
     }
   }
 }

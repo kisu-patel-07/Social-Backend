@@ -102,7 +102,9 @@ class SettingsService {
     const user = await userRepository.findOne({ _id: userId }, '+password');
     if (!user) throw new NotFoundError('User not found');
     if (!user.password) {
-      throw new BadRequestError('This account has no password set (OAuth login)');
+      throw new BadRequestError(
+        "This account doesn't have a password yet, so there is nothing to change."
+      );
     }
     const ok = await comparePassword(currentPassword, user.password);
     if (!ok) throw new BadRequestError('Current password is incorrect');

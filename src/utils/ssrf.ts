@@ -69,26 +69,28 @@ export async function assertSafePublicUrl(rawUrl: string): Promise<void> {
   try {
     url = new URL(rawUrl);
   } catch {
-    throw new BadRequestError('Invalid URL.');
+    throw new BadRequestError("That doesn't look like a valid link. Double-check the address.");
   }
   if (url.protocol !== 'https:') {
-    throw new BadRequestError('URL must use https.');
+    throw new BadRequestError('The link must start with https://.');
   }
   const host = url.hostname.toLowerCase();
   if (isBlockedHost(host)) {
-    throw new BadRequestError('URL host is not allowed.');
+    throw new BadRequestError("That link isn't allowed. Use a public https:// address.");
   }
   if (net.isIP(host)) {
-    if (isPrivateIp(host)) throw new BadRequestError('URL host is not allowed.');
+    if (isPrivateIp(host)) {
+      throw new BadRequestError("That link isn't allowed. Use a public https:// address.");
+    }
     return;
   }
   let addresses: { address: string }[];
   try {
     addresses = await dns.lookup(host, { all: true });
   } catch {
-    throw new BadRequestError('URL host could not be resolved.');
+    throw new BadRequestError("We couldn't reach that link. Double-check the address.");
   }
   if (!addresses.length || addresses.some((a) => isPrivateIp(a.address))) {
-    throw new BadRequestError('URL host is not allowed.');
+    throw new BadRequestError("That link isn't allowed. Use a public https:// address.");
   }
 }

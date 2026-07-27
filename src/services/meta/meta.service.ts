@@ -137,7 +137,10 @@ class MetaService {
           error: (error as Error).message,
         });
         await socialAccountRepository.updateById(account.id, {
-          $set: { lastError: 'Token refresh failed — please reconnect this account.' },
+          $set: {
+            lastError:
+              "We couldn't renew this account's Instagram connection — please reconnect it.",
+          },
         });
       }
     }
