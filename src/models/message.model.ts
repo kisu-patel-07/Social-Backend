@@ -79,6 +79,9 @@ const messageSchema = new Schema<IMessage>(
 
 messageSchema.index({ conversation: 1, createdAt: 1 });
 messageSchema.index({ workspace: 1, type: 1, createdAt: -1 });
+// Monthly-quota gate: counts OUTBOUND messages per workspace in the billing
+// window on EVERY webhook event and manual reply — must not scan.
+messageSchema.index({ workspace: 1, direction: 1, createdAt: -1 });
 // Prevent processing the same external event twice.
 messageSchema.index(
   { socialAccount: 1, externalId: 1 },
