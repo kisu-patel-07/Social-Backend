@@ -966,7 +966,7 @@ class AdminService {
       await socialAccountRepository.updateById(account._id, {
         isWebhookSubscribed: false,
         lastError:
-          "Instagram notifications aren't set up yet, so automations can't hear new comments or DMs. Use \"Retry webhook\" or reconnect this account.",
+          'Instagram notifications aren\'t set up yet, so automations can\'t hear new comments or DMs. Use "Retry webhook" or reconnect this account.',
       });
     }
 
