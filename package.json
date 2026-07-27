@@ -18,7 +18,8 @@
     "seed:plans": "ts-node src/scripts/seedPlans.ts",
     "admin:promote": "ts-node src/scripts/promoteAdmin.ts",
     "job:refresh-tokens": "ts-node src/scripts/refreshTokens.ts",
-    "db:sync-indexes": "ts-node src/scripts/syncIndexes.ts"
+    "db:sync-indexes": "ts-node src/scripts/syncIndexes.ts",
+    "subs:check": "ts-node src/scripts/checkSubscriptionPlans.ts"
   },
   "keywords": [
     "saas",

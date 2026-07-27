@@ -8,4 +8,7 @@ const router = Router();
 router.get('/meta', webhookController.verify);
 router.post('/meta', webhookController.receive);
 
+// Razorpay webhook (payment.captured → reliable server-side plan activation).
+router.post('/razorpay', webhookController.razorpay);
+
 export default router;

@@ -11,7 +11,8 @@ import {
   SubscriptionStatus,
 } from '../constants';
 import { HttpStatus } from '../constants/httpStatus';
-import { isProduction } from '../config/env';
+import { env, isProduction } from '../config/env';
+import { logger } from '../config/logger';
 import { IPlan } from '../models/plan.model';
 import { ISubscription } from '../models/subscription.model';
 import { IInvoice } from '../models/invoice.model';
@@ -133,8 +134,13 @@ class SubscriptionService {
       return { allowed: false, reason: 'TRIAL_EXPIRED' };
     }
 
-    // Paid period lapsed without renewal → lazily drop back to the Free plan
-    // (still allowed, just Free limits). Runs once; needs no cron job.
+    // Paid period lapsed without renewal → mark the subscription EXPIRED but
+    // PRESERVE its plan reference. We deliberately do NOT rewrite `plan` to Free:
+    // that was a silent, irreversible downgrade that also misfired on a stale or
+    // clock-skewed `currentPeriodEnd` (e.g. after a cross-environment DB copy),
+    // pinning paying customers to Free features with no audit trail. Keeping the
+    // plan makes the state visible ("Pro — expired") in admin and recoverable on
+    // renewal (choosePlan/verifyCheckout set status ACTIVE + a fresh period).
     const plan = subscription.plan as unknown as IPlan | null;
     const paidLapsed =
       subscription.status === SubscriptionStatus.ACTIVE &&
@@ -142,42 +148,24 @@ class SubscriptionService {
       subscription.currentPeriodEnd.getTime() < Date.now();
 
     if (paidLapsed) {
-      const freePlan = await planRepository.findFreeActivePlan();
-      if (freePlan) {
-        // The plan period is over — any admin-granted bonus goes with it.
-        await subscriptionRepository.updateById(subscription._id, {
-          $set: {
-            plan: freePlan._id,
-            currentPeriodStart: new Date(),
-            currentPeriodEnd: addDays(new Date(), 3650),
-          },
-          $unset: { bonus: '' },
-        });
-        if (subscription.bonus) {
-          await activityService.log({
-            workspace: workspaceId,
-            action: ActivityAction.ADMIN_BONUS_REMOVED,
-            description: 'Bonus benefits removed automatically — the plan period ended',
-            entityType: 'Subscription',
-            entityId: subscription._id,
-          });
-        }
-        await this.notifyWorkspaceOwner(
-          workspaceId,
-          `Your ${plan?.name ?? 'paid'} plan has ended`,
-          'You are back on the Free plan. Renew anytime from Billing to restore your limits.'
-        );
-        return { allowed: true };
-      }
-      // No ₹0 plan to fall back to — pause access until they renew.
+      // The plan period is over — any admin-granted bonus goes with it.
       await subscriptionRepository.updateById(subscription._id, {
         $set: { status: SubscriptionStatus.EXPIRED },
         $unset: { bonus: '' },
       });
+      if (subscription.bonus) {
+        await activityService.log({
+          workspace: workspaceId,
+          action: ActivityAction.ADMIN_BONUS_REMOVED,
+          description: 'Bonus benefits removed automatically — the plan period ended',
+          entityType: 'Subscription',
+          entityId: subscription._id,
+        });
+      }
       await this.notifyWorkspaceOwner(
         workspaceId,
-        `Your ${plan?.name ?? ''} plan has ended`,
-        'Automations are paused. Renew from Billing to keep replying automatically.'
+        `Your ${plan?.name ?? 'paid'} plan has ended`,
+        'Automations are paused. Renew from Billing to restore your plan.'
       );
       return { allowed: false, reason: 'SUBSCRIPTION_INACTIVE' };
     }
@@ -224,6 +212,19 @@ class SubscriptionService {
     const subscription = await subscriptionRepository.findByWorkspace(workspaceId);
     const plan = subscription?.plan as unknown as IPlan | null;
     if (!plan) {
+      // A subscription whose `plan` reference no longer resolves is a data-integrity
+      // problem — most commonly a subscription copied across databases pointing at a
+      // plan _id that was never seeded there. Historically this SILENTLY served Free
+      // to a paying customer (the "paid Pro but got Regular features" bug). Log loudly
+      // so it surfaces in monitoring/admin instead of degrading quietly. Run
+      // `npm run subs:check` to list every affected subscription.
+      if (subscription) {
+        logger.error('Subscription plan reference did not resolve — serving fallback entitlements', {
+          workspaceId,
+          subscriptionId: String(subscription._id),
+          status: subscription.status,
+        });
+      }
       // No plan resolved. Stay permissive in unseeded dev; in production fail
       // SAFE to the real Free plan (or a conservative floor) so a missing
       // subscription document can never hand out unlimited usage.
@@ -391,7 +392,13 @@ class SubscriptionService {
       currency: plan.currency || 'INR',
       // Receipt must be <= 40 chars for Razorpay.
       receipt: `ws-${user.workspaceId.slice(-12)}-${Date.now().toString(36)}`,
-      notes: { workspaceId: user.workspaceId, planId: plan._id.toString(), email: user.email },
+      // `app` separates this app's payments in the shared Razorpay dashboard.
+      notes: {
+        app: env.APP_ID,
+        workspaceId: user.workspaceId,
+        planId: plan._id.toString(),
+        email: user.email,
+      },
     });
 
     return { ...order, keyId: paymentService.keyId, planName: plan.name };
@@ -420,20 +427,68 @@ class SubscriptionService {
       params.razorpaySignature
     );
 
-    // Idempotency: a replayed verify call must not double-extend the period.
-    const existing = await paymentRepository.findOne({
+    return this.recordPaidActivation({
+      workspaceId: user.workspaceId,
+      plan,
+      razorpayOrderId: params.razorpayOrderId,
+      razorpayPaymentId: params.razorpayPaymentId,
+      actor: { userId: user.id, email: user.email },
+    });
+  }
+
+  /**
+   * Idempotently record a successful paid activation: set the subscription ACTIVE
+   * for a fresh period and create the payment + invoice. Safe to call from BOTH
+   * the client verify flow and the Razorpay webhook — whichever arrives first
+   * wins; the loser is a no-op, guarded by the unique providerPaymentId index.
+   */
+  private async recordPaidActivation(params: {
+    workspaceId: string;
+    plan: IPlan;
+    razorpayOrderId: string;
+    razorpayPaymentId: string;
+    actor?: { userId?: string; email?: string };
+  }): Promise<ISubscription> {
+    const { workspaceId, plan } = params;
+
+    const currentSubscription = async (): Promise<ISubscription> =>
+      (await subscriptionRepository.findByWorkspace(workspaceId)) ??
+      (await subscriptionRepository.findOne({ workspace: workspaceId }))!;
+
+    // Fast path for the common replay (webhook arriving after client verify ran).
+    const already = await paymentRepository.findOne({
       providerPaymentId: params.razorpayPaymentId,
     });
-    if (existing) {
-      const current = await subscriptionRepository.findByWorkspace(user.workspaceId);
-      if (current) return current;
-    }
+    if (already) return currentSubscription();
 
     const now = new Date();
     const periodEnd = planPeriodEnd(plan, now);
 
+    // Create the payment FIRST so the unique providerPaymentId index rejects a
+    // concurrent duplicate (client-verify + webhook race) before we do the rest.
+    let payment;
+    try {
+      payment = await paymentRepository.create({
+        workspace: new Types.ObjectId(workspaceId),
+        app: env.APP_ID,
+        plan: plan._id,
+        amount: plan.priceAmount,
+        currency: plan.currency || 'INR',
+        status: PaymentStatus.SUCCEEDED,
+        provider: 'razorpay',
+        providerPaymentId: params.razorpayPaymentId,
+        providerOrderId: params.razorpayOrderId,
+        method: 'razorpay',
+        paidAt: now,
+      });
+    } catch (error) {
+      // Duplicate key ⇒ the other path won the race and already recorded it.
+      if ((error as { code?: number }).code === 11000) return currentSubscription();
+      throw error;
+    }
+
     const subscription = await subscriptionRepository.updateOne(
-      { workspace: user.workspaceId },
+      { workspace: workspaceId },
       {
         $set: {
           plan: plan._id,
@@ -447,19 +502,13 @@ class SubscriptionService {
       { new: true, upsert: true }
     );
 
-    const payment = await paymentRepository.create({
-      workspace: new Types.ObjectId(user.workspaceId),
-      amount: plan.priceAmount,
-      currency: plan.currency || 'INR',
-      status: PaymentStatus.SUCCEEDED,
-      provider: 'razorpay',
-      providerPaymentId: params.razorpayPaymentId,
-      method: 'razorpay',
-      paidAt: now,
+    // Link the payment to the subscription now that it exists.
+    await paymentRepository.updateById(payment._id, {
+      $set: { subscription: subscription?._id },
     });
 
     await invoiceRepository.create({
-      workspace: new Types.ObjectId(user.workspaceId),
+      workspace: new Types.ObjectId(workspaceId),
       subscription: subscription?._id,
       number: `INV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${payment._id.toString().slice(-6).toUpperCase()}`,
       status: InvoiceStatus.PAID,
@@ -473,14 +522,58 @@ class SubscriptionService {
     });
 
     await activityService.log({
-      workspace: user.workspaceId,
-      user: user.id,
+      workspace: workspaceId,
+      user: params.actor?.userId,
       action: ActivityAction.ADMIN_SUBSCRIPTION_UPDATED,
-      description: `${user.email} upgraded to ${plan.name} via Razorpay (${params.razorpayPaymentId})`,
+      description: `${params.actor?.email ?? 'Payment'} activated the ${plan.name} plan via Razorpay (${params.razorpayPaymentId})`,
       entityType: 'Subscription',
     });
 
-    return (await subscriptionRepository.findByWorkspace(user.workspaceId)) ?? subscription!;
+    return currentSubscription();
+  }
+
+  /**
+   * Handle a verified Razorpay webhook event. Acts on `payment.captured` to
+   * activate the plan server-side — the safety net for when the browser closed
+   * before client verify completed. Idempotent via recordPaidActivation, and it
+   * ignores payments belonging to other apps that share this Razorpay account.
+   */
+  async handleRazorpayWebhook(event: {
+    event?: string;
+    payload?: {
+      payment?: { entity?: { id?: string; order_id?: string; notes?: Record<string, string> } };
+    };
+  }): Promise<void> {
+    if (event.event !== 'payment.captured') return;
+    const entity = event.payload?.payment?.entity;
+    if (!entity?.id || !entity.order_id) return;
+
+    const notes = entity.notes ?? {};
+    if (notes.app && notes.app !== env.APP_ID) return; // another app's payment
+    const { workspaceId, planId } = notes;
+    if (!workspaceId || !planId) {
+      logger.warn('Razorpay webhook payment.captured missing routing notes', {
+        paymentId: entity.id,
+      });
+      return;
+    }
+
+    const plan = await planRepository.findById(planId);
+    if (!plan) {
+      logger.error('Razorpay webhook: plan not found for captured payment', {
+        planId,
+        paymentId: entity.id,
+      });
+      return;
+    }
+
+    await this.recordPaidActivation({
+      workspaceId,
+      plan,
+      razorpayOrderId: entity.order_id,
+      razorpayPaymentId: entity.id,
+    });
+    logger.info('Razorpay webhook activated plan', { workspaceId, planId, paymentId: entity.id });
   }
 
   /**

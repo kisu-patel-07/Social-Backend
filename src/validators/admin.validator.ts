@@ -134,6 +134,8 @@ export const adminGrantBonusSchema = z.object({
 export const adminListPaymentsSchema = z.object({
   query: paginationQuerySchema.extend({
     status: z.nativeEnum(PaymentStatus).optional(),
+    // Filter to a specific app when several apps share one gateway/database.
+    app: z.string().optional(),
   }),
 });
 

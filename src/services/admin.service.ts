@@ -101,6 +101,8 @@ export interface AdminUserDetail {
     messagesLast30Days: number;
   };
   recentActivity: IActivityLog[];
+  /** Recent payments for this workspace (plan populated), newest first. */
+  payments: IPayment[];
   /** Internal support notes — never serialized on the user doc itself. */
   adminNotes: string;
 }
@@ -395,6 +397,7 @@ class AdminService {
       leads,
       messagesLast30Days,
       recentActivity,
+      payments,
     ] = await Promise.all([
       workspaceRepository.findById(workspaceId),
       subscriptionRepository.findOne({ workspace: workspaceId }, undefined, {
@@ -408,6 +411,13 @@ class AdminService {
       activityLogRepository.find({ workspace: workspaceId }, undefined, {
         sort: { createdAt: -1 },
         limit: 10,
+      }),
+      // Recent payments so admin can reconcile the active plan against what was
+      // actually paid for (the "paid Pro but shows Regular" check).
+      paymentRepository.find({ workspace: workspaceId }, undefined, {
+        sort: { createdAt: -1 },
+        limit: 10,
+        populate: { path: 'plan', select: 'name code priceAmount currency' },
       }),
     ]);
 
@@ -423,6 +433,7 @@ class AdminService {
         messagesLast30Days,
       },
       recentActivity,
+      payments,
       // toJSON strips adminNotes off `user`; surfaced separately, admin-only.
       adminNotes: user.adminNotes ?? '',
     };
@@ -1149,13 +1160,15 @@ class AdminService {
   // ---- Payments / refunds ---------------------------------------------------------
 
   listPayments(
-    filters: PaginationOptions & { status?: PaymentStatus }
+    filters: PaginationOptions & { status?: PaymentStatus; app?: string }
   ): Promise<PaginatedResult<IPayment>> {
     const query: FilterQuery<IPayment> = {};
     if (filters.status) query.status = filters.status;
+    if (filters.app) query.app = filters.app;
     return paymentRepository.paginate(query, filters, undefined, [
       { path: 'workspace', select: 'name' },
       { path: 'invoice', select: 'number status' },
+      { path: 'plan', select: 'name code priceAmount currency' },
     ]);
   }
 

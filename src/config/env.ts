@@ -30,6 +30,15 @@ const envSchema = z
     API_PREFIX: z.string().default('/api/v1'),
     CLIENT_URL: z.string().default('http://localhost:3000'),
 
+    /**
+     * Identifies THIS app when several apps share one payment gateway account.
+     * Stamped onto every Razorpay order's `notes` (visible in the Razorpay
+     * dashboard) and onto each stored payment record, so this app's revenue can
+     * be told apart from the others'.
+     */
+    APP_ID: z.string().default('socialdm'),
+    APP_NAME: z.string().default('SocialDM'),
+
     MONGODB_URI: z.string().min(1, 'MONGODB_URI is required'),
 
     JWT_ACCESS_SECRET: z.string().min(1, 'JWT_ACCESS_SECRET is required'),
@@ -66,6 +75,12 @@ const envSchema = z
     /** Razorpay checkout. Payments stay disabled (request-upgrade fallback) until both are set. */
     RAZORPAY_KEY_ID: z.string().default(''),
     RAZORPAY_KEY_SECRET: z.string().default(''),
+    /**
+     * Razorpay webhook signing secret (set in the Razorpay dashboard → Webhooks).
+     * Enables reliable server-side plan activation on `payment.captured`, so a
+     * paid checkout activates even if the browser closed before client verify.
+     */
+    RAZORPAY_WEBHOOK_SECRET: z.string().default(''),
 
     /** Public base of this API — used to build tracked short links (/r/:slug). */
     PUBLIC_API_URL: z.string().default('http://localhost:5000/api/v1'),

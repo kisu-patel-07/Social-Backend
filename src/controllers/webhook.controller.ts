@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
 import { logger } from '../config/logger';
 import { HttpStatus } from '../constants/httpStatus';
-import { webhookService } from '../services';
+import { subscriptionService, webhookService } from '../services';
+import { paymentService } from '../services/payment.service';
 import { verifyWebhookChallenge, verifyWebhookSignature } from '../services/meta';
 import { asyncHandler } from '../utils/asyncHandler';
 
@@ -53,6 +54,32 @@ export const webhookController = {
       // Swallow — still ACK so Meta doesn't hammer retries; idempotency guards
       // any reprocessing on the next delivery.
       logger.error('Webhook processing error', { error: (error as Error).message });
+    }
+    res.sendStatus(HttpStatus.OK);
+  }),
+
+  /**
+   * POST — Razorpay webhook. Verifies the HMAC signature against the raw body
+   * (captured in app.ts), then activates the plan on `payment.captured`. This is
+   * the reliable server-side path: a paid checkout activates even if the browser
+   * closed before the client verify call. Idempotent, so it never double-charges
+   * or double-activates alongside the client flow.
+   */
+  razorpay: asyncHandler(async (req: Request, res: Response) => {
+    const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
+    const signature = req.headers['x-razorpay-signature'] as string | undefined;
+
+    if (!rawBody || !paymentService.verifyWebhookSignature(rawBody, signature)) {
+      logger.warn('Rejected Razorpay webhook with invalid signature');
+      res.sendStatus(HttpStatus.FORBIDDEN);
+      return;
+    }
+
+    try {
+      await subscriptionService.handleRazorpayWebhook(req.body);
+    } catch (error) {
+      // ACK anyway so Razorpay stops retrying; recordPaidActivation is idempotent.
+      logger.error('Razorpay webhook processing error', { error: (error as Error).message });
     }
     res.sendStatus(HttpStatus.OK);
   }),

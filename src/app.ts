@@ -31,12 +31,16 @@ export function createApp(): Application {
   app.use(compression());
   app.use(cookieParser());
 
-  // Capture the raw body for the Meta webhook so its signature can be verified.
+  // Capture the raw body for webhooks (Meta + Razorpay) so their signatures can
+  // be verified against the exact bytes received.
   app.use(
     express.json({
       limit: '1mb',
       verify: (req: Request, _res, buf) => {
-        if (req.originalUrl.includes('/webhooks/meta')) {
+        if (
+          req.originalUrl.includes('/webhooks/meta') ||
+          req.originalUrl.includes('/webhooks/razorpay')
+        ) {
           (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
         }
       },
