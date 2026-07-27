@@ -55,6 +55,7 @@ export const leadController = {
     const csv = await leadService.exportCsv(req.user!.workspaceId, {
       platform: req.query.platform as Platform | undefined,
       status: req.query.status as LeadStatus | undefined,
+      source: req.query.source as LeadSource | undefined,
       socialAccountId: req.query.socialAccountId as string | undefined,
       search: req.query.search as string | undefined,
     });

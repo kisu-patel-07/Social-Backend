@@ -948,9 +948,11 @@ class AdminService {
 
     try {
       await metaClient.subscribePageWebhooks(account.pageId, account.accessToken);
+      // A plain `lastError: undefined` is stripped by Mongoose and would leave
+      // the stale error in place (and the account stuck in the health list).
       await socialAccountRepository.updateById(account._id, {
-        isWebhookSubscribed: true,
-        lastError: undefined,
+        $set: { isWebhookSubscribed: true },
+        $unset: { lastError: '' },
       });
     } catch (error) {
       const detail = (error as { details?: unknown })?.details;
@@ -959,9 +961,12 @@ class AdminService {
           ? JSON.stringify(detail).slice(0, 280)
           : (error as Error).message;
       logger.warn('Admin webhook retry failed', { accountId: id, reason });
+      // lastError shows on the user's account card too — keep it friendly; the
+      // raw Meta reason stays in the log line above.
       await socialAccountRepository.updateById(account._id, {
         isWebhookSubscribed: false,
-        lastError: reason,
+        lastError:
+          "Instagram notifications aren't set up yet, so automations can't hear new comments or DMs. Use \"Retry webhook\" or reconnect this account.",
       });
     }
 

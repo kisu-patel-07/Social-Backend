@@ -15,6 +15,7 @@ import { addDays } from '../utils/date';
 import { analyticsService } from './analytics.service';
 import { linkTrackingService } from './linkTracking.service';
 import { metaClient } from './meta';
+import { subscriptionService } from './subscription.service';
 import { IncomingComment, IncomingMessage, IncomingPostback } from './meta/meta.types';
 
 const EMAIL_REGEX = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i;
@@ -65,6 +66,31 @@ class FlowEngineService {
     await FlowRunModel.updateOne({ _id: runId }, { $set: patch }).exec();
   }
 
+  /**
+   * Same billing gates as every other automated-send path (comment, DM,
+   * studio, AI). Flow sends are triggered by webhooks/cron, so a lapsed
+   * subscription or spent quota pauses them and bell-notifies the owner.
+   * Gated here — the single choke point every flow send goes through.
+   */
+  private async billingAllows(workspaceId: string): Promise<boolean> {
+    const access = await subscriptionService.getAccessState(workspaceId);
+    if (!access.allowed) {
+      logger.info('Flow DM skipped: subscription inactive', { workspace: workspaceId });
+      void subscriptionService.notifyAutomationsPaused(workspaceId, 'subscription');
+      return false;
+    }
+    const quota = await subscriptionService.getMessageQuota(workspaceId);
+    if (quota.exceeded) {
+      logger.info('Flow DM skipped: monthly reply limit reached', {
+        workspace: workspaceId,
+        limit: quota.limit,
+      });
+      void subscriptionService.notifyAutomationsPaused(workspaceId, 'quota');
+      return false;
+    }
+    return true;
+  }
+
   /** Record + send a plain-text DM to a recipient; returns whether it sent. */
   private async sendText(
     account: ISocialAccount,
@@ -72,6 +98,7 @@ class FlowEngineService {
     recipient: Recipient,
     text: string
   ): Promise<boolean> {
+    if (!(await this.billingAllows(account.workspace.toString()))) return false;
     const msg = await messageRepository.create({
       workspace: account.workspace,
       socialAccount: account._id,
@@ -122,6 +149,7 @@ class FlowEngineService {
     buttonTitle: string,
     action: 'follow' | 'link'
   ): Promise<boolean> {
+    if (!(await this.billingAllows(account.workspace.toString()))) return false;
     const msg = await messageRepository.create({
       workspace: account.workspace,
       socialAccount: account._id,

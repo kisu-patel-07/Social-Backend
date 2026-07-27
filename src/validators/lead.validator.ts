@@ -42,6 +42,7 @@ export const exportLeadsSchema = z.object({
   query: z.object({
     platform: z.nativeEnum(Platform).optional(),
     status: z.nativeEnum(LeadStatus).optional(),
+    source: z.nativeEnum(LeadSource).optional(),
     socialAccountId: objectIdSchema.optional(),
     search: z.string().trim().max(200).optional(),
   }),
