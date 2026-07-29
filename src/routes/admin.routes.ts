@@ -85,6 +85,16 @@ router.patch(
 router.get('/plans', adminController.listPlans);
 router.post('/plans', validate(adminCreatePlanSchema), adminController.createPlan);
 router.put('/plans/:id', validate(adminUpdatePlanSchema), adminController.updatePlan);
+router.post(
+  '/plans/:id/sync-razorpay',
+  validate(z.object({ params: idParamSchema })),
+  adminController.syncPlan
+);
+router.delete(
+  '/plans/:id',
+  validate(z.object({ params: idParamSchema })),
+  adminController.deletePlan
+);
 
 // Automation oversight (classic + Studio, merged)
 router.get('/automations', validate(adminListAutomationsSchema), adminController.listAutomations);

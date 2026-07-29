@@ -96,8 +96,20 @@ export function planPeriodEnd(plan: IPlan, from = new Date()): Date {
  * "first month free, then ₹249" real.
  */
 class SubscriptionService {
-  listPlans(): Promise<IPlan[]> {
-    return planRepository.listActive();
+  /**
+   * Plans a customer may actually buy right now. A paid plan is hidden until it
+   * has been synced to Razorpay (Admin → Plans → Sync), because without a
+   * gateway plan there is nothing to charge against — showing it would mean a
+   * checkout that always fails. Free plans need no gateway and always show.
+   *
+   * When Razorpay isn't configured at all the app falls back to the manual
+   * "request upgrade" flow, which works without a gateway plan — so in that
+   * mode paid plans stay visible rather than emptying the pricing page.
+   */
+  async listPlans(): Promise<IPlan[]> {
+    const plans = await planRepository.listActive();
+    if (!paymentService.isConfigured()) return plans;
+    return plans.filter((plan) => plan.priceAmount === 0 || Boolean(plan.razorpayPlanId));
   }
 
   getCurrent(workspaceId: string): Promise<ISubscription | null> {
@@ -148,9 +160,14 @@ class SubscriptionService {
       subscription.currentPeriodEnd.getTime() < Date.now();
 
     if (paidLapsed) {
+      // A plan the user cancelled ends as CANCELED (their choice, ran to term);
+      // one that simply lapsed ends as EXPIRED. Neither grants access.
+      const endedByChoice = subscription.cancelAtPeriodEnd === true;
       // The plan period is over — any admin-granted bonus goes with it.
       await subscriptionRepository.updateById(subscription._id, {
-        $set: { status: SubscriptionStatus.EXPIRED },
+        $set: {
+          status: endedByChoice ? SubscriptionStatus.CANCELED : SubscriptionStatus.EXPIRED,
+        },
         $unset: { bonus: '' },
       });
       if (subscription.bonus) {
@@ -165,7 +182,9 @@ class SubscriptionService {
       await this.notifyWorkspaceOwner(
         workspaceId,
         `Your ${plan?.name ?? 'paid'} plan has ended`,
-        'Automations are paused. Renew from Billing to restore your plan.'
+        endedByChoice
+          ? 'Your cancellation is now complete and automations are paused. You can start a plan again any time from Billing.'
+          : 'Automations are paused. Renew from Billing to restore your plan.'
       );
       return { allowed: false, reason: 'SUBSCRIPTION_INACTIVE' };
     }
@@ -419,6 +438,194 @@ class SubscriptionService {
   }
 
   /**
+   * Cancel the current plan at the END of the paid period — never mid-term.
+   * The subscription stays ACTIVE (full access, automations keep running) until
+   * `currentPeriodEnd`; the lapse check in getAccessState() then closes it as
+   * CANCELED. Nothing is refunded: the user keeps what they already paid for.
+   * Reversible with resumePlan() while the period is still running.
+   */
+  async cancelPlan(user: AuthUser): Promise<ISubscription> {
+    const subscription = await subscriptionRepository.findByWorkspace(user.workspaceId);
+    if (!subscription) throw new NotFoundError('Subscription not found');
+
+    const plan = subscription.plan as unknown as IPlan | null;
+    if ((plan?.priceAmount ?? 0) === 0) {
+      throw new BadRequestError(
+        "You're on a free plan, so there's nothing to cancel. You can switch plans any time."
+      );
+    }
+    if (!ACCESS_STATUSES.includes(subscription.status)) {
+      throw new BadRequestError('This plan has already ended, so there is nothing to cancel.');
+    }
+    if (subscription.cancelAtPeriodEnd) {
+      throw new BadRequestError('This plan is already set to end — no further action is needed.');
+    }
+
+    // Stop the mandate FIRST when this is an auto-renewing subscription. If
+    // Razorpay refuses, we must NOT mark it cancelled locally — otherwise the
+    // app would say "cancelled" while the customer keeps getting charged.
+    if (subscription.externalSubscriptionId) {
+      await paymentService.cancelSubscription(subscription.externalSubscriptionId, true);
+    }
+
+    const updated = await subscriptionRepository.updateById(subscription._id, {
+      $set: { cancelAtPeriodEnd: true, canceledAt: new Date() },
+    });
+
+    await activityService.log({
+      workspace: user.workspaceId,
+      user: user.id,
+      action: ActivityAction.SUBSCRIPTION_CANCELED,
+      description: `${user.email} cancelled the ${plan?.name ?? 'paid'} plan (ends ${subscription.currentPeriodEnd.toISOString().slice(0, 10)})`,
+      entityType: 'Subscription',
+      entityId: subscription._id,
+    });
+
+    await this.notifyWorkspaceOwner(
+      user.workspaceId,
+      'Your plan is set to end',
+      `${plan?.name ?? 'Your plan'} stays active until ${subscription.currentPeriodEnd.toISOString().slice(0, 10)} and won't renew. Changed your mind? Reactivate it from Billing.`
+    );
+
+    return (await subscriptionRepository.findByWorkspace(user.workspaceId)) ?? updated!;
+  }
+
+  /** Undo a pending cancellation while the paid period is still running. */
+  async resumePlan(user: AuthUser): Promise<ISubscription> {
+    const subscription = await subscriptionRepository.findByWorkspace(user.workspaceId);
+    if (!subscription) throw new NotFoundError('Subscription not found');
+
+    if (!subscription.cancelAtPeriodEnd) {
+      throw new BadRequestError('This plan is not scheduled to end, so there is nothing to undo.');
+    }
+    if (subscription.currentPeriodEnd.getTime() < Date.now()) {
+      throw new BadRequestError(
+        'This plan has already ended. Choose it again from Billing to start a new period.'
+      );
+    }
+    // A cancelled Razorpay mandate is terminal — it cannot be revived, only
+    // replaced by a new subscription (which needs the customer to authorize
+    // payment again). Say so instead of pretending the undo worked.
+    if (subscription.externalSubscriptionId) {
+      throw new BadRequestError(
+        'Automatic renewal was stopped with your bank, so it cannot be switched back on. Choose your plan again from Billing to set up a new subscription.'
+      );
+    }
+
+    const updated = await subscriptionRepository.updateById(subscription._id, {
+      $set: { cancelAtPeriodEnd: false },
+      $unset: { canceledAt: '' },
+    });
+
+    const plan = subscription.plan as unknown as IPlan | null;
+    await activityService.log({
+      workspace: user.workspaceId,
+      user: user.id,
+      action: ActivityAction.SUBSCRIPTION_RESUMED,
+      description: `${user.email} reactivated the ${plan?.name ?? 'paid'} plan`,
+      entityType: 'Subscription',
+      entityId: subscription._id,
+    });
+
+    return (await subscriptionRepository.findByWorkspace(user.workspaceId)) ?? updated!;
+  }
+
+  /**
+   * How many cycles to authorize on a Razorpay subscription. Razorpay requires
+   * a finite count, so we authorize ~10 years' worth (capped at its limit) —
+   * long enough that renewals never silently stop for an active customer.
+   */
+  private subscriptionCycles(plan: IPlan): number {
+    if (plan.interval === BillingInterval.YEARLY) return 10;
+    if (plan.interval === BillingInterval.DAYS) {
+      const days = plan.durationDays ?? 30;
+      return Math.max(1, Math.min(100, Math.floor(3650 / days)));
+    }
+    return 120; // monthly
+  }
+
+  /**
+   * Start an AUTO-RENEWING subscription for a plan: Razorpay collects a mandate
+   * once (UPI Autopay / card e-mandate) and then charges every cycle by itself.
+   * Each charge arrives as a `subscription.charged` webhook that extends the
+   * period, so the workspace never lapses. Requires the plan to be synced with
+   * `npm run razorpay:sync-plans`.
+   */
+  async createSubscriptionCheckout(
+    user: AuthUser,
+    planId: string
+  ): Promise<{
+    subscriptionId: string;
+    amount: number;
+    currency: string;
+    keyId: string;
+    planName: string;
+  }> {
+    const plan = await planRepository.findById(planId);
+    if (!plan || !plan.isActive) throw new NotFoundError('Plan not found');
+    if (plan.priceAmount <= 0) {
+      throw new BadRequestError('This plan is free — switch to it directly');
+    }
+    if (!plan.razorpayPlanId) {
+      throw new BadRequestError(
+        'Automatic renewal is not set up for this plan yet. Please choose the one-time payment option.'
+      );
+    }
+
+    const { subscriptionId } = await paymentService.createSubscription({
+      razorpayPlanId: plan.razorpayPlanId,
+      totalCount: this.subscriptionCycles(plan),
+      // `app` separates this app's activity in a shared Razorpay account; the
+      // rest routes the recurring webhooks back to the right workspace/plan.
+      notes: {
+        app: env.APP_ID,
+        workspaceId: user.workspaceId,
+        planId: plan._id.toString(),
+        email: user.email,
+      },
+    });
+
+    return {
+      subscriptionId,
+      amount: plan.priceAmount,
+      currency: plan.currency || 'INR',
+      keyId: paymentService.keyId,
+      planName: plan.name,
+    };
+  }
+
+  /**
+   * Confirm the first charge of an auto-renewing subscription and activate the
+   * plan. Later cycles need no client involvement — they arrive as webhooks.
+   */
+  async verifySubscriptionCheckout(
+    user: AuthUser,
+    params: {
+      planId: string;
+      razorpayPaymentId: string;
+      razorpaySubscriptionId: string;
+      razorpaySignature: string;
+    }
+  ): Promise<ISubscription> {
+    const plan = await planRepository.findById(params.planId);
+    if (!plan || !plan.isActive) throw new NotFoundError('Plan not found');
+
+    paymentService.verifySubscriptionSignature(
+      params.razorpayPaymentId,
+      params.razorpaySubscriptionId,
+      params.razorpaySignature
+    );
+
+    return this.recordPaidActivation({
+      workspaceId: user.workspaceId,
+      plan,
+      razorpayPaymentId: params.razorpayPaymentId,
+      razorpaySubscriptionId: params.razorpaySubscriptionId,
+      actor: { userId: user.id, email: user.email },
+    });
+  }
+
+  /**
    * Step 1 of Razorpay checkout: create a gateway order for the plan.
    * The client opens Razorpay Checkout against this order id.
    */
@@ -496,8 +703,13 @@ class SubscriptionService {
   private async recordPaidActivation(params: {
     workspaceId: string;
     plan: IPlan;
-    razorpayOrderId: string;
+    razorpayOrderId?: string;
     razorpayPaymentId: string;
+    /** Set on auto-renewing plans so future cycles can be matched back. */
+    razorpaySubscriptionId?: string;
+    /** Cycle window from Razorpay on a renewal; defaults to "now + interval". */
+    periodStart?: Date;
+    periodEnd?: Date;
     actor?: { userId?: string; email?: string };
   }): Promise<ISubscription> {
     const { workspaceId, plan } = params;
@@ -513,7 +725,10 @@ class SubscriptionService {
     if (already) return currentSubscription();
 
     const now = new Date();
-    const periodEnd = planPeriodEnd(plan, now);
+    // Razorpay tells us the exact cycle window on a renewal; fall back to our
+    // own interval maths for one-time (manual) payments.
+    const periodStart = params.periodStart ?? now;
+    const periodEnd = params.periodEnd ?? planPeriodEnd(plan, periodStart);
 
     // Create the payment FIRST so the unique providerPaymentId index rejects a
     // concurrent duplicate (client-verify + webhook race) before we do the rest.
@@ -544,11 +759,14 @@ class SubscriptionService {
         $set: {
           plan: plan._id,
           status: SubscriptionStatus.ACTIVE,
-          currentPeriodStart: now,
+          currentPeriodStart: periodStart,
           currentPeriodEnd: periodEnd,
           cancelAtPeriodEnd: false,
+          ...(params.razorpaySubscriptionId
+            ? { externalSubscriptionId: params.razorpaySubscriptionId }
+            : {}),
         },
-        $unset: { trialEndsAt: '', trialEndingNotifiedAt: '', bonus: '' },
+        $unset: { trialEndsAt: '', trialEndingNotifiedAt: '', bonus: '', canceledAt: '' },
       },
       { new: true, upsert: true }
     );
@@ -592,12 +810,44 @@ class SubscriptionService {
   async handleRazorpayWebhook(event: {
     event?: string;
     payload?: {
-      payment?: { entity?: { id?: string; order_id?: string; notes?: Record<string, string> } };
+      payment?: {
+        entity?: {
+          id?: string;
+          order_id?: string;
+          invoice_id?: string;
+          notes?: Record<string, string>;
+        };
+      };
+      subscription?: {
+        entity?: {
+          id?: string;
+          current_start?: number;
+          current_end?: number;
+          notes?: Record<string, string>;
+        };
+      };
     };
   }): Promise<void> {
-    if (event.event !== 'payment.captured') return;
+    switch (event.event) {
+      case 'subscription.charged':
+        return this.handleSubscriptionCharged(event);
+      case 'subscription.cancelled':
+        return this.handleSubscriptionEnded(event, 'cancelled');
+      case 'subscription.halted':
+        return this.handleSubscriptionEnded(event, 'halted');
+      case 'subscription.pending':
+        return this.handleSubscriptionPending(event);
+      case 'payment.captured':
+        break;
+      default:
+        return;
+    }
+
     const entity = event.payload?.payment?.entity;
     if (!entity?.id || !entity.order_id) return;
+    // Recurring charges also emit payment.captured, but they carry an invoice
+    // and are owned by subscription.charged — skip them here.
+    if (entity.invoice_id) return;
 
     const notes = entity.notes ?? {};
     if (notes.app && notes.app !== env.APP_ID) return; // another app's payment
@@ -625,6 +875,114 @@ class SubscriptionService {
       razorpayPaymentId: entity.id,
     });
     logger.info('Razorpay webhook activated plan', { workspaceId, planId, paymentId: entity.id });
+  }
+
+  /**
+   * THE auto-renewal path: Razorpay charged the saved mandate for a new cycle.
+   * Extends the period with the exact window Razorpay reports, so an active
+   * customer never lapses and needs to do nothing.
+   */
+  private async handleSubscriptionCharged(event: {
+    payload?: {
+      payment?: { entity?: { id?: string; order_id?: string } };
+      subscription?: {
+        entity?: {
+          id?: string;
+          current_start?: number;
+          current_end?: number;
+          notes?: Record<string, string>;
+        };
+      };
+    };
+  }): Promise<void> {
+    const sub = event.payload?.subscription?.entity;
+    const payment = event.payload?.payment?.entity;
+    if (!sub?.id || !payment?.id) return;
+
+    const notes = sub.notes ?? {};
+    if (notes.app && notes.app !== env.APP_ID) return; // another app's subscription
+    const { workspaceId, planId } = notes;
+    if (!workspaceId || !planId) {
+      logger.warn('Razorpay subscription.charged missing routing notes', {
+        subscriptionId: sub.id,
+      });
+      return;
+    }
+
+    const plan = await planRepository.findById(planId);
+    if (!plan) {
+      logger.error('Razorpay subscription.charged: plan not found', { planId, id: sub.id });
+      return;
+    }
+
+    await this.recordPaidActivation({
+      workspaceId,
+      plan,
+      razorpayPaymentId: payment.id,
+      razorpayOrderId: payment.order_id,
+      razorpaySubscriptionId: sub.id,
+      periodStart: sub.current_start ? new Date(sub.current_start * 1000) : undefined,
+      periodEnd: sub.current_end ? new Date(sub.current_end * 1000) : undefined,
+    });
+    logger.info('Razorpay subscription renewed', {
+      workspaceId,
+      planId,
+      subscriptionId: sub.id,
+      paymentId: payment.id,
+    });
+  }
+
+  /** Look up the local subscription a Razorpay subscription id belongs to. */
+  private async findByRazorpaySubscription(id: string): Promise<ISubscription | null> {
+    return subscriptionRepository.findOne({ externalSubscriptionId: id });
+  }
+
+  /**
+   * Razorpay stopped the mandate — either the customer cancelled it there, or
+   * every retry for a failed charge was exhausted ("halted"). Either way there
+   * will be no further charges: flag it so the period runs out and ends, and
+   * tell the owner while they still have access.
+   */
+  private async handleSubscriptionEnded(
+    event: { payload?: { subscription?: { entity?: { id?: string } } } },
+    reason: 'cancelled' | 'halted'
+  ): Promise<void> {
+    const id = event.payload?.subscription?.entity?.id;
+    if (!id) return;
+    const subscription = await this.findByRazorpaySubscription(id);
+    if (!subscription) return;
+
+    if (!subscription.cancelAtPeriodEnd) {
+      await subscriptionRepository.updateById(subscription._id, {
+        $set: { cancelAtPeriodEnd: true, canceledAt: new Date() },
+      });
+    }
+
+    await this.notifyWorkspaceOwner(
+      subscription.workspace.toString(),
+      reason === 'halted' ? "We couldn't collect your payment" : 'Automatic renewal stopped',
+      reason === 'halted'
+        ? 'Your bank declined the renewal, so your plan will not continue. Your current period still works — set up payment again from Billing to stay active.'
+        : "Your plan won't renew automatically any more. It stays active until the current period ends."
+    );
+    logger.info('Razorpay subscription ended', { subscriptionId: id, reason });
+  }
+
+  /** A scheduled charge failed; Razorpay will retry. Nudge the owner early. */
+  private async handleSubscriptionPending(event: {
+    payload?: { subscription?: { entity?: { id?: string } } };
+  }): Promise<void> {
+    const id = event.payload?.subscription?.entity?.id;
+    if (!id) return;
+    const subscription = await this.findByRazorpaySubscription(id);
+    if (!subscription) return;
+
+    await this.notifyWorkspaceOwner(
+      subscription.workspace.toString(),
+      'Your renewal payment did not go through',
+      "We'll try again shortly. To avoid any interruption, check that your payment method is active and has sufficient balance."
+    );
+    logger.info('Razorpay subscription payment pending retry', { subscriptionId: id });
   }
 
   /**

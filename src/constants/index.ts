@@ -175,6 +175,8 @@ export enum ActivityAction {
   LEAD_CREATED = 'lead.created',
   LEAD_UPDATED = 'lead.updated',
   MESSAGE_SENT = 'message.sent',
+  SUBSCRIPTION_CANCELED = 'subscription.canceled',
+  SUBSCRIPTION_RESUMED = 'subscription.resumed',
   // Platform-admin actions (performed from the /admin panel).
   ADMIN_USER_SUSPENDED = 'admin.user_suspended',
   ADMIN_USER_UNSUSPENDED = 'admin.user_unsuspended',
@@ -183,6 +185,8 @@ export enum ActivityAction {
   ADMIN_SUBSCRIPTION_UPDATED = 'admin.subscription_updated',
   ADMIN_PLAN_CREATED = 'admin.plan_created',
   ADMIN_PLAN_UPDATED = 'admin.plan_updated',
+  ADMIN_PLAN_DELETED = 'admin.plan_deleted',
+  ADMIN_PLAN_SYNCED = 'admin.plan_synced',
   ADMIN_AUTOMATION_PAUSED = 'admin.automation_paused',
   ADMIN_AUTOMATION_RESUMED = 'admin.automation_resumed',
   ADMIN_WEBHOOK_RETRIED = 'admin.webhook_retried',

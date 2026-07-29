@@ -29,6 +29,12 @@ export interface IPlan extends Document {
   /** Marketing bullet points shown on the pricing card. */
   features: string[];
   isActive: boolean;
+  /**
+   * Matching plan id at Razorpay (`plan_xxx`), created by `npm run
+   * razorpay:sync-plans`. Present ⇒ this plan can be sold as an auto-renewing
+   * subscription; absent ⇒ it falls back to a one-time order per period.
+   */
+  razorpayPlanId?: string;
   /** Sort order for pricing tables. */
   sortOrder: number;
   createdAt: Date;
@@ -61,6 +67,7 @@ const planSchema = new Schema<IPlan>(
     },
     features: { type: [String], default: [] },
     isActive: { type: Boolean, default: true },
+    razorpayPlanId: { type: String, trim: true },
     sortOrder: { type: Number, default: 0 },
   },
   { timestamps: true }

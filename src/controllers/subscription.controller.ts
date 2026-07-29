@@ -34,6 +34,30 @@ export const subscriptionController = {
     sendSuccess(res, subscription, 'Payment successful — plan activated 🎉');
   }),
 
+  /** Start an auto-renewing subscription (Razorpay collects a mandate once). */
+  subscribe: asyncHandler(async (req: Request, res: Response) => {
+    const subscription = await subscriptionService.createSubscriptionCheckout(
+      req.user!,
+      req.body.planId
+    );
+    sendSuccess(res, subscription, 'Subscription created');
+  }),
+
+  subscribeVerify: asyncHandler(async (req: Request, res: Response) => {
+    const subscription = await subscriptionService.verifySubscriptionCheckout(req.user!, req.body);
+    sendSuccess(res, subscription, 'Payment successful — your plan renews automatically 🎉');
+  }),
+
+  cancel: asyncHandler(async (req: Request, res: Response) => {
+    const subscription = await subscriptionService.cancelPlan(req.user!);
+    sendSuccess(res, subscription, "Your plan won't renew — you keep full access until it ends");
+  }),
+
+  resume: asyncHandler(async (req: Request, res: Response) => {
+    const subscription = await subscriptionService.resumePlan(req.user!);
+    sendSuccess(res, subscription, 'Your plan is active again');
+  }),
+
   requestUpgrade: asyncHandler(async (req: Request, res: Response) => {
     await subscriptionService.requestUpgrade(req.user!, req.body.planId);
     sendSuccess(res, null, "Request sent — we'll activate your plan shortly");

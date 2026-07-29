@@ -23,6 +23,8 @@ import { StudioAutomationModel } from '../models/studioAutomation.model';
 import { ISystemBanner, SystemSettingModel } from '../models/systemSetting.model';
 import { metaClient } from './meta';
 import { logger } from '../config/logger';
+import { env } from '../config/env';
+import { paymentService } from './payment.service';
 import { planPeriodEnd } from './subscription.service';
 import { signAccessToken } from '../utils/jwt';
 import { buildTotpUri, generateTotpSecret, totpQrDataUrl, verifyTotpCode } from '../utils/totp';
@@ -49,7 +51,13 @@ import {
 } from '../repositories';
 import { AuthUser } from '../types/auth.types';
 import { PaginatedResult, PaginationOptions } from '../types/common.types';
-import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from '../utils/AppError';
+import {
+  AppError,
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+} from '../utils/AppError';
 import { addDays } from '../utils/date';
 import { buildPaginationMeta } from '../utils/pagination';
 import { activityService } from './activity.service';
@@ -723,6 +731,106 @@ class AdminService {
       entityId: updated._id,
     });
     return updated;
+  }
+
+  /**
+   * Create this plan at Razorpay so it can be sold as an auto-renewing
+   * subscription, and remember the returned id. Until this runs, the plan is
+   * hidden from customers (nothing to charge against). Idempotent: a plan that
+   * already has an id is returned untouched.
+   */
+  async syncPlanWithRazorpay(actor: AuthUser, id: string): Promise<IPlan> {
+    const plan = await planRepository.findById(id);
+    if (!plan) throw new NotFoundError('Plan not found');
+    if (plan.priceAmount === 0) {
+      throw new BadRequestError(
+        'Free plans do not need to be synced — they are always available to customers.'
+      );
+    }
+    if (plan.razorpayPlanId) return plan;
+    if (!paymentService.isConfigured()) {
+      throw new BadRequestError(
+        'Razorpay keys are not configured on the server, so plans cannot be synced yet.'
+      );
+    }
+
+    // Razorpay bills "every N days" as period=daily + interval=N.
+    const cycle =
+      plan.interval === BillingInterval.YEARLY
+        ? { period: 'yearly' as const, interval: 1 }
+        : plan.interval === BillingInterval.DAYS
+          ? {
+              period: 'daily' as const,
+              interval: Math.max(1, Math.min(365, plan.durationDays ?? 30)),
+            }
+          : { period: 'monthly' as const, interval: 1 };
+
+    let planId: string;
+    try {
+      ({ planId } = await paymentService.createPlan({
+        period: cycle.period,
+        interval: cycle.interval,
+        name: plan.name,
+        description: plan.description,
+        amount: plan.priceAmount,
+        currency: plan.currency || 'INR',
+        notes: { app: env.APP_ID, planCode: plan.code },
+      }));
+    } catch (error) {
+      // Rethrow as a 400 with Razorpay's reason: the admin can usually fix
+      // this by editing the plan (e.g. a non-INR currency on an INR-only
+      // account), and a generic 5xx toast would hide what to fix.
+      if (error instanceof AppError && error.errorCode === 'RAZORPAY_ORDER_FAILED') {
+        const reason = error.message.replace(/^Payment gateway error: /, '');
+        throw new BadRequestError(
+          `Razorpay didn't accept this plan: ${reason}. Edit the plan (check its currency and price), then sync again.`
+        );
+      }
+      throw error;
+    }
+
+    const updated = await planRepository.updateById(plan._id, {
+      $set: { razorpayPlanId: planId },
+    });
+    if (!updated) throw new NotFoundError('Plan not found');
+
+    await activityService.log({
+      workspace: actor.workspaceId,
+      user: actor.id,
+      action: ActivityAction.ADMIN_PLAN_SYNCED,
+      description: `${actor.email} synced plan "${plan.code}" with Razorpay (${planId})`,
+      entityType: 'Plan',
+      entityId: plan._id,
+    });
+    return updated;
+  }
+
+  /**
+   * Permanently remove a plan. Refused while any subscription still points at
+   * it — a dangling plan reference silently degrades paying customers to
+   * fallback entitlements (the "paid Pro but got Regular features" bug). Hide
+   * it with the Visible switch instead; that keeps existing subscribers working.
+   */
+  async deletePlan(actor: AuthUser, id: string): Promise<void> {
+    const plan = await planRepository.findById(id);
+    if (!plan) throw new NotFoundError('Plan not found');
+
+    const subscribers = await subscriptionRepository.count({ plan: plan._id });
+    if (subscribers > 0) {
+      throw new ConflictError(
+        `${subscribers} workspace${subscribers === 1 ? '' : 's'} still use this plan, so it can't be deleted. Turn off "Visible" to retire it — existing subscribers keep working, and nobody new can pick it.`
+      );
+    }
+
+    await planRepository.deleteById(plan._id);
+    await activityService.log({
+      workspace: actor.workspaceId,
+      user: actor.id,
+      action: ActivityAction.ADMIN_PLAN_DELETED,
+      description: `${actor.email} deleted plan "${plan.code}"`,
+      entityType: 'Plan',
+      entityId: plan._id,
+    });
   }
 
   // ---- Automation oversight ---------------------------------------------------

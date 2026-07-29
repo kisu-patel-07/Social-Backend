@@ -19,7 +19,8 @@
     "admin:promote": "ts-node src/scripts/promoteAdmin.ts",
     "job:refresh-tokens": "ts-node src/scripts/refreshTokens.ts",
     "db:sync-indexes": "ts-node src/scripts/syncIndexes.ts",
-    "subs:check": "ts-node src/scripts/checkSubscriptionPlans.ts"
+    "subs:check": "ts-node src/scripts/checkSubscriptionPlans.ts",
+    "razorpay:sync-plans": "ts-node src/scripts/syncRazorpayPlans.ts"
   },
   "keywords": [
     "saas",

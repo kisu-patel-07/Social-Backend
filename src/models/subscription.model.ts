@@ -27,8 +27,14 @@ export interface ISubscription extends Document {
   };
   cancelAtPeriodEnd: boolean;
   canceledAt?: Date;
-  /** Placeholder for a future gateway customer/subscription reference. */
+  /** Gateway customer reference (Razorpay `cust_xxx`), when one exists. */
   externalCustomerId?: string;
+  /**
+   * Razorpay subscription id (`sub_xxx`) when the workspace is on an
+   * AUTO-RENEWING plan: Razorpay charges the saved mandate each cycle and the
+   * `subscription.charged` webhook extends the period. Absent ⇒ manual
+   * pay-per-period (a one-time order each time).
+   */
   externalSubscriptionId?: string;
   createdAt: Date;
   updatedAt: Date;

@@ -83,6 +83,17 @@ export const adminController = {
     sendSuccess(res, plan, 'Plan updated');
   }),
 
+  /** Create the matching Razorpay plan so this one can be sold to customers. */
+  syncPlan: asyncHandler(async (req: Request, res: Response) => {
+    const plan = await adminService.syncPlanWithRazorpay(req.user!, req.params.id);
+    sendSuccess(res, plan, 'Plan synced with Razorpay — customers can subscribe to it now');
+  }),
+
+  deletePlan: asyncHandler(async (req: Request, res: Response) => {
+    await adminService.deletePlan(req.user!, req.params.id);
+    sendSuccess(res, null, 'Plan deleted');
+  }),
+
   // ---- Automation oversight ---------------------------------------------------
   listAutomations: asyncHandler(async (req: Request, res: Response) => {
     const options = buildPaginationOptions(req.query);
