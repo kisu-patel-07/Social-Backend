@@ -19,6 +19,7 @@ import {
   adminListUsersSchema,
   adminListWorkspacesSchema,
   adminSearchWorkspacesSchema,
+  adminSupportUpdateSchema,
   adminSuspendUserSchema,
   adminTotpCodeSchema,
   adminUserNotesSchema,
@@ -157,6 +158,25 @@ router.get(
 
 // Internal notes on a user
 router.patch('/users/:id/notes', validate(adminUserNotesSchema), adminController.setUserNotes);
+
+// "Locked out" support: email the user a password-reset link.
+router.post(
+  '/users/:id/send-password-reset',
+  validate(z.object({ params: idParamSchema })),
+  adminController.sendPasswordReset
+);
+
+// Support inbox (public contact-form submissions)
+router.get('/support', adminController.listSupport);
+router.patch('/support/:id', validate(adminSupportUpdateSchema), adminController.updateSupport);
+
+// Webhook debug trail (Meta + Razorpay deliveries)
+router.get('/webhook-events', adminController.listWebhookEvents);
+router.post(
+  '/webhook-events/:id/reprocess',
+  validate(z.object({ params: idParamSchema })),
+  adminController.reprocessWebhookEvent
+);
 
 // Users CSV export
 router.get('/users-export', adminController.exportUsersCsv);

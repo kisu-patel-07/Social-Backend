@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
-import { PaymentStatus, SubscriptionStatus } from '../constants';
+import { ContactMessageStatus, PaymentStatus, SubscriptionStatus } from '../constants';
 import { adminService } from '../services/admin.service';
 import { featureService } from '../services/feature.service';
+import { opsService } from '../services/ops.service';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendCreated, sendNoContent, sendPaginated, sendSuccess } from '../utils/apiResponse';
 import { buildPaginationOptions } from '../utils/pagination';
@@ -12,6 +13,46 @@ export const adminController = {
   overview: asyncHandler(async (_req: Request, res: Response) => {
     const overview = await adminService.getOverview();
     sendSuccess(res, overview);
+  }),
+
+  // ---- Support inbox ---------------------------------------------------------
+  listSupport: asyncHandler(async (req: Request, res: Response) => {
+    const options = buildPaginationOptions(req.query);
+    const result = await adminService.listSupportMessages({
+      ...options,
+      status: req.query.status as ContactMessageStatus | undefined,
+    });
+    sendPaginated(res, result.items, result.meta);
+  }),
+
+  updateSupport: asyncHandler(async (req: Request, res: Response) => {
+    const message = await adminService.updateSupportMessage(req.user!, req.params.id, req.body);
+    sendSuccess(res, message, 'Support message updated');
+  }),
+
+  sendPasswordReset: asyncHandler(async (req: Request, res: Response) => {
+    await adminService.sendPasswordReset(req.user!, req.params.id);
+    sendSuccess(res, null, 'Password-reset email sent');
+  }),
+
+  // ---- Webhook debug trail ---------------------------------------------------
+  listWebhookEvents: asyncHandler(async (req: Request, res: Response) => {
+    const options = buildPaginationOptions(req.query);
+    const result = await opsService.listWebhookEvents({
+      ...options,
+      source: req.query.source as 'meta' | 'razorpay' | undefined,
+      outcome: req.query.outcome as 'processed' | 'failed' | 'rejected' | 'ignored' | undefined,
+    });
+    sendPaginated(res, result.items, result.meta);
+  }),
+
+  reprocessWebhookEvent: asyncHandler(async (req: Request, res: Response) => {
+    const event = await opsService.reprocessWebhookEvent(req.user!, req.params.id);
+    sendSuccess(
+      res,
+      event,
+      event.outcome === 'processed' ? 'Delivery re-processed' : 'Re-processing failed — see error'
+    );
   }),
 
   // ---- Users ----------------------------------------------------------------

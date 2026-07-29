@@ -229,5 +229,19 @@ export const adminBroadcastSchema = z.object({
       .optional(),
     audience: z.enum(['all', 'verified']),
     planId: objectIdSchema.optional(),
+    channel: z.enum(['bell', 'email', 'both']).optional(),
   }),
+});
+
+/** PATCH /admin/support/:id */
+export const adminSupportUpdateSchema = z.object({
+  params: z.object({ id: objectIdSchema }),
+  body: z
+    .object({
+      status: z.enum(['open', 'replied', 'closed']).optional(),
+      adminNote: z.string().trim().max(2000).optional(),
+    })
+    .refine((b) => b.status !== undefined || b.adminNote !== undefined, {
+      message: 'Provide a status or a note to save',
+    }),
 });

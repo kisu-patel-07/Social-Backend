@@ -163,6 +163,13 @@ export enum PaymentStatus {
   REFUNDED = 'refunded',
 }
 
+/** Lifecycle of a public contact-form submission in the admin support inbox. */
+export enum ContactMessageStatus {
+  OPEN = 'open',
+  REPLIED = 'replied',
+  CLOSED = 'closed',
+}
+
 export enum ActivityAction {
   USER_REGISTERED = 'user.registered',
   USER_LOGGED_IN = 'user.logged_in',
@@ -199,6 +206,9 @@ export enum ActivityAction {
   ADMIN_2FA_DISABLED = 'admin.2fa_disabled',
   ADMIN_NOTES_UPDATED = 'admin.notes_updated',
   ADMIN_BANNER_UPDATED = 'admin.banner_updated',
+  ADMIN_SUPPORT_UPDATED = 'admin.support_updated',
+  ADMIN_PASSWORD_RESET_SENT = 'admin.password_reset_sent',
+  ADMIN_WEBHOOK_REPROCESSED = 'admin.webhook_reprocessed',
   ADMIN_BONUS_GRANTED = 'admin.bonus_granted',
   ADMIN_BONUS_REMOVED = 'admin.bonus_removed',
 }

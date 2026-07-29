@@ -11,6 +11,18 @@ class EmailService {
     return brevoClient.send({ to: { email: to, name }, ...c });
   }
 
+  /** Admin broadcast announcement — best-effort per recipient. */
+  sendAnnouncement(
+    to: string,
+    name: string,
+    title: string,
+    body: string,
+    link?: string
+  ): Promise<void> {
+    const c = emailTemplates.announcement(name, title, body, link);
+    return brevoClient.send({ to: { email: to, name }, ...c });
+  }
+
   /** Verification email — critical: throws on send failure so the caller can react. */
   sendVerification(to: string, name: string, verifyUrl: string, otp: string): Promise<void> {
     const c = emailTemplates.verifyEmail(name, verifyUrl, otp);

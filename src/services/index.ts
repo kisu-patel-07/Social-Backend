@@ -13,5 +13,6 @@ export { activityService } from './activity.service';
 export { adminService } from './admin.service';
 export { featureService, requireFeature } from './feature.service';
 export { webhookService } from './webhook.service';
+export { opsService } from './ops.service';
 export { emailService } from './email/email.service';
 export { metaService, metaClient } from './meta';

@@ -3,6 +3,7 @@ import { ensureDatabaseConnection } from '../../src/config/database';
 import { env } from '../../src/config/env';
 import { logger } from '../../src/config/logger';
 import { metaService } from '../../src/services/meta';
+import { opsService } from '../../src/services/ops.service';
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
@@ -28,7 +29,10 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
   try {
     await ensureDatabaseConnection();
-    const result = await metaService.refreshExpiringTokens();
+    // recordJobRun persists the outcome for the admin Health page's cron cards.
+    const result = await opsService.recordJobRun('refresh-tokens', () =>
+      metaService.refreshExpiringTokens()
+    );
     logger.info('Token refresh job complete', result);
     send(res, 200, { success: true, data: result });
   } catch (error) {

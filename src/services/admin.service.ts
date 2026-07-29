@@ -3,6 +3,7 @@ import {
   ActivityAction,
   AutomationStatus,
   BillingInterval,
+  ContactMessageStatus,
   MessageDirection,
   MessageStatus,
   NotificationType,
@@ -11,6 +12,7 @@ import {
   StudioAutomationStatus,
   SubscriptionStatus,
 } from '../constants';
+import { IContactMessage } from '../models/contactMessage.model';
 import { IActivityLog } from '../models/activityLog.model';
 import { IMessage } from '../models/message.model';
 import { IPayment } from '../models/payment.model';
@@ -35,8 +37,10 @@ import { linkTrackingService } from './linkTracking.service';
 import {
   activityLogRepository,
   automationRepository,
+  contactMessageRepository,
   conversationRepository,
   invoiceRepository,
+  jobRunRepository,
   keywordRepository,
   leadRepository,
   messageRepository,
@@ -61,6 +65,8 @@ import {
 import { addDays } from '../utils/date';
 import { buildPaginationMeta } from '../utils/pagination';
 import { activityService } from './activity.service';
+import { authService } from './auth.service';
+import { emailService } from './email/email.service';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -188,6 +194,14 @@ export interface AdminHealth {
     failureRate24h: number;
   };
   recentFailures: IMessage[];
+  /** Last run of each scheduled job — a dead cron is otherwise invisible. */
+  jobs: Array<{
+    job: string;
+    ok: boolean;
+    summary?: string;
+    lastRunAt: Date;
+    durationMs: number;
+  }>;
 }
 
 interface BroadcastParams {
@@ -197,6 +211,8 @@ interface BroadcastParams {
   audience: 'all' | 'verified';
   /** Restrict to workspaces on this plan (active/trialing). */
   planId?: string;
+  /** Where to deliver: in-app bell, email (via Brevo), or both. Default bell. */
+  channel?: 'bell' | 'email' | 'both';
 }
 
 /** Deep-dive metrics for the admin analytics page. */
@@ -1024,6 +1040,8 @@ class AdminService {
       ),
     ]);
 
+    const jobRuns = await jobRunRepository.latestPerJob();
+
     return {
       accounts: {
         total: totalAccounts,
@@ -1041,6 +1059,13 @@ class AdminService {
         failureRate24h: sent24h > 0 ? Math.round((failed24h / sent24h) * 100) : 0,
       },
       recentFailures,
+      jobs: jobRuns.map((r) => ({
+        job: r.job,
+        ok: r.ok,
+        summary: r.summary,
+        lastRunAt: r.createdAt,
+        durationMs: r.durationMs,
+      })),
     };
   }
 
@@ -1100,6 +1125,7 @@ class AdminService {
    * Suspended users are always excluded. Returns the recipient count.
    */
   async broadcast(actor: AuthUser, params: BroadcastParams): Promise<{ recipients: number }> {
+    const channel = params.channel ?? 'bell';
     const userFilter: FilterQuery<IUser> = { isSuspended: { $ne: true } };
     if (params.audience === 'verified') userFilter.isEmailVerified = true;
 
@@ -1114,34 +1140,114 @@ class AdminService {
       userFilter.workspace = { $in: subs.map((s) => s.workspace) };
     }
 
-    const users = await userRepository.find(userFilter, '_id workspace');
+    const users = await userRepository.find(userFilter, '_id workspace name email');
     if (users.length === 0) return { recipients: 0 };
 
-    const docs = users.map((u) => ({
-      workspace: u.workspace,
-      user: u._id,
-      type: NotificationType.SYSTEM,
-      title: params.title,
-      body: params.body,
-      link: params.link,
-      metadata: { broadcast: true, sentBy: actor.email },
-    }));
+    if (channel !== 'email') {
+      const docs = users.map((u) => ({
+        workspace: u.workspace,
+        user: u._id,
+        type: NotificationType.SYSTEM,
+        title: params.title,
+        body: params.body,
+        link: params.link,
+        metadata: { broadcast: true, sentBy: actor.email },
+      }));
 
-    // Chunked inserts keep single write batches bounded as the user base grows.
-    const CHUNK = 500;
-    for (let i = 0; i < docs.length; i += CHUNK) {
-      await notificationRepository.insertMany(docs.slice(i, i + CHUNK));
+      // Chunked inserts keep single write batches bounded as the user base grows.
+      const CHUNK = 500;
+      for (let i = 0; i < docs.length; i += CHUNK) {
+        await notificationRepository.insertMany(docs.slice(i, i + CHUNK));
+      }
+    }
+
+    if (channel !== 'bell') {
+      // Best-effort per recipient (brevoClient swallows non-critical failures);
+      // small batches keep us inside Brevo's rate limits.
+      const EMAIL_CHUNK = 20;
+      for (let i = 0; i < users.length; i += EMAIL_CHUNK) {
+        await Promise.all(
+          users
+            .slice(i, i + EMAIL_CHUNK)
+            .map((u) =>
+              emailService.sendAnnouncement(u.email, u.name, params.title, params.body, params.link)
+            )
+        );
+      }
     }
 
     await activityService.log({
       workspace: actor.workspaceId,
       user: actor.id,
       action: ActivityAction.ADMIN_BROADCAST_SENT,
-      description: `${actor.email} broadcast "${params.title}" to ${users.length} user(s) [${params.audience}${params.planId ? ', plan-filtered' : ''}]`,
-      metadata: { title: params.title, audience: params.audience, recipients: users.length },
+      description: `${actor.email} broadcast "${params.title}" to ${users.length} user(s) via ${channel} [${params.audience}${params.planId ? ', plan-filtered' : ''}]`,
+      metadata: {
+        title: params.title,
+        audience: params.audience,
+        channel,
+        recipients: users.length,
+      },
     });
 
     return { recipients: users.length };
+  }
+
+  // ---- Support inbox ------------------------------------------------------------
+
+  /** Paginated contact-form submissions, newest first, optional status filter. */
+  listSupportMessages(
+    filters: PaginationOptions & { status?: ContactMessageStatus }
+  ): Promise<PaginatedResult<IContactMessage>> {
+    const query: FilterQuery<IContactMessage> = {};
+    if (filters.status) query.status = filters.status;
+    return contactMessageRepository.paginate(query, filters);
+  }
+
+  /** Update a support message's status / internal note. */
+  async updateSupportMessage(
+    actor: AuthUser,
+    id: string,
+    params: { status?: ContactMessageStatus; adminNote?: string }
+  ): Promise<IContactMessage> {
+    const existing = await contactMessageRepository.findById(id);
+    if (!existing) throw new NotFoundError('Support message not found');
+
+    const set: Record<string, unknown> = { handledBy: actor.id };
+    if (params.status) set.status = params.status;
+    if (params.adminNote !== undefined) set.adminNote = params.adminNote;
+
+    const updated = await contactMessageRepository.updateById(existing._id, { $set: set });
+    if (!updated) throw new NotFoundError('Support message not found');
+
+    await activityService.log({
+      workspace: actor.workspaceId,
+      user: actor.id,
+      action: ActivityAction.ADMIN_SUPPORT_UPDATED,
+      description: `${actor.email} marked support message from ${existing.email} as ${updated.status}`,
+      entityType: 'ContactMessage',
+      entityId: existing._id,
+    });
+    return updated;
+  }
+
+  /**
+   * Email a password-reset link to any user — the "I'm locked out" support
+   * button. Reuses the normal forgot-password flow (same token TTL).
+   */
+  async sendPasswordReset(actor: AuthUser, userId: string): Promise<void> {
+    const user = await userRepository.findById(userId);
+    if (!user) throw new NotFoundError('User not found');
+
+    await authService.forgotPassword(user.email);
+
+    await activityService.log({
+      workspace: actor.workspaceId,
+      user: actor.id,
+      action: ActivityAction.ADMIN_PASSWORD_RESET_SENT,
+      description: `${actor.email} sent a password-reset email to ${user.email}`,
+      entityType: 'User',
+      entityId: user._id,
+    });
   }
 
   // ---- Impersonation ------------------------------------------------------------

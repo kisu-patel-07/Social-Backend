@@ -28,6 +28,21 @@ function button(label: string, url: string): string {
 }
 
 export const emailTemplates = {
+  /** Admin broadcast announcement (title/body written in the admin panel). */
+  announcement(name: string, title: string, body: string, link?: string): EmailContent {
+    const cta = link
+      ? `<p style="margin-top:16px;">${button('Open SocialDM', link.startsWith('http') ? link : `${env.CLIENT_URL.split(',')[0]}${link}`)}</p>`
+      : '';
+    return {
+      subject: title,
+      html: layout(
+        htmlEscape(title),
+        `<p>Hi ${htmlEscape(name)},</p><p style="white-space:pre-line;">${htmlEscape(body)}</p>${cta}`
+      ),
+      text: `Hi ${name},\n\n${body}${link ? `\n\n${link}` : ''}`,
+    };
+  },
+
   welcome(name: string): EmailContent {
     return {
       subject: `Welcome to ${env.BREVO_SENDER_NAME} 🎉`,

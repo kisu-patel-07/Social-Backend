@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { logger } from '../config/logger';
 import { HttpStatus } from '../constants/httpStatus';
-import { subscriptionService, webhookService } from '../services';
+import { opsService, subscriptionService, webhookService } from '../services';
 import { paymentService } from '../services/payment.service';
 import { verifyWebhookChallenge, verifyWebhookSignature } from '../services/meta';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -44,16 +44,35 @@ export const webhookController = {
 
     if (!rawBody || !verifyWebhookSignature(rawBody, signature)) {
       logger.warn('Rejected webhook with invalid signature');
+      await opsService.recordWebhookEvent({
+        source: 'meta',
+        event: `${body?.object ?? 'unknown'} (bad signature)`,
+        outcome: 'rejected',
+        error: 'Invalid or missing X-Hub-Signature-256',
+      });
       res.sendStatus(HttpStatus.FORBIDDEN);
       return;
     }
 
     try {
       await webhookService.process(req.body);
+      await opsService.recordWebhookEvent({
+        source: 'meta',
+        event: body?.object ?? 'unknown',
+        outcome: 'processed',
+        payload: req.body,
+      });
     } catch (error) {
       // Swallow — still ACK so Meta doesn't hammer retries; idempotency guards
       // any reprocessing on the next delivery.
       logger.error('Webhook processing error', { error: (error as Error).message });
+      await opsService.recordWebhookEvent({
+        source: 'meta',
+        event: body?.object ?? 'unknown',
+        outcome: 'failed',
+        payload: req.body,
+        error: (error as Error).message,
+      });
     }
     res.sendStatus(HttpStatus.OK);
   }),
@@ -69,17 +88,38 @@ export const webhookController = {
     const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
     const signature = req.headers['x-razorpay-signature'] as string | undefined;
 
+    const eventName = (req.body as { event?: string })?.event ?? 'unknown';
+
     if (!rawBody || !paymentService.verifyWebhookSignature(rawBody, signature)) {
       logger.warn('Rejected Razorpay webhook with invalid signature');
+      await opsService.recordWebhookEvent({
+        source: 'razorpay',
+        event: `${eventName} (bad signature)`,
+        outcome: 'rejected',
+        error: 'Invalid or missing X-Razorpay-Signature',
+      });
       res.sendStatus(HttpStatus.FORBIDDEN);
       return;
     }
 
     try {
       await subscriptionService.handleRazorpayWebhook(req.body);
+      await opsService.recordWebhookEvent({
+        source: 'razorpay',
+        event: eventName,
+        outcome: 'processed',
+        payload: req.body,
+      });
     } catch (error) {
       // ACK anyway so Razorpay stops retrying; recordPaidActivation is idempotent.
       logger.error('Razorpay webhook processing error', { error: (error as Error).message });
+      await opsService.recordWebhookEvent({
+        source: 'razorpay',
+        event: eventName,
+        outcome: 'failed',
+        payload: req.body,
+        error: (error as Error).message,
+      });
     }
     res.sendStatus(HttpStatus.OK);
   }),
