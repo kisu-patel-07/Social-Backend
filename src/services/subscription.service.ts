@@ -41,7 +41,7 @@ const ACCESS_STATUSES: SubscriptionStatus[] = [
 
 export interface AccessState {
   allowed: boolean;
-  reason?: 'TRIAL_EXPIRED' | 'SUBSCRIPTION_INACTIVE';
+  reason?: 'TRIAL_EXPIRED' | 'SUBSCRIPTION_INACTIVE' | 'NO_PLAN';
 }
 
 /** The current plan's limits + feature switches for a workspace. */
@@ -59,6 +59,12 @@ export interface WorkspaceEntitlements {
 const UNRESTRICTED: WorkspaceEntitlements = {
   limits: { connectedAccounts: -1, automations: -1, monthlyMessages: -1, teamMembers: -1 },
   entitlements: { studio: true, csvExport: true },
+};
+
+/** A workspace with no subscription: nothing is included until a plan is chosen. */
+const NO_PLAN: WorkspaceEntitlements = {
+  limits: { connectedAccounts: 0, automations: 0, monthlyMessages: 0, teamMembers: 0 },
+  entitlements: { studio: false, csvExport: false },
 };
 
 /**
@@ -128,11 +134,14 @@ class SubscriptionService {
    * Evaluated lazily on every enforcement point (not just by the cron job),
    * so an overdue trial locks the moment it lapses; the first check that
    * catches it also persists status=EXPIRED for dashboards/admin. Workspaces
-   * with no subscription document at all are allowed (unseeded dev setups).
+   * with no subscription document have no plan yet and are blocked.
    */
   async getAccessState(workspaceId: string): Promise<AccessState> {
     const subscription = await subscriptionRepository.findByWorkspace(workspaceId);
-    if (!subscription) return { allowed: true };
+    // New accounts start with NO subscription at all: nothing runs until the
+    // user picks a plan from Billing. (This used to fail open for dev setups —
+    // now that "no plan" is a real product state, it must block.)
+    if (!subscription) return { allowed: false, reason: 'NO_PLAN' };
 
     const trialOverdue =
       subscription.status === SubscriptionStatus.TRIALING &&
@@ -277,7 +286,11 @@ class SubscriptionService {
    */
   async getEntitlements(workspaceId: string): Promise<WorkspaceEntitlements> {
     const subscription = await subscriptionRepository.findByWorkspace(workspaceId);
-    const plan = subscription?.plan as unknown as IPlan | null;
+    // No subscription = the user hasn't picked a plan yet — nothing included,
+    // so meters honestly show 0 and every gate stays closed.
+    if (!subscription) return NO_PLAN;
+
+    const plan = subscription.plan as unknown as IPlan | null;
     if (!plan) {
       // A subscription whose `plan` reference no longer resolves is a data-integrity
       // problem — most commonly a subscription copied across databases pointing at a
@@ -285,24 +298,19 @@ class SubscriptionService {
       // to a paying customer (the "paid Pro but got Regular features" bug). Log loudly
       // so it surfaces in monitoring/admin instead of degrading quietly. Run
       // `npm run subs:check` to list every affected subscription.
-      if (subscription) {
-        logger.error(
-          'Subscription plan reference did not resolve — serving fallback entitlements',
-          {
-            workspaceId,
-            subscriptionId: String(subscription._id),
-            status: subscription.status,
-          }
-        );
-      }
-      // No plan resolved. Stay permissive in unseeded dev; in production fail
-      // SAFE to the real Free plan (or a conservative floor) so a missing
-      // subscription document can never hand out unlimited usage.
+      logger.error('Subscription plan reference did not resolve — serving fallback entitlements', {
+        workspaceId,
+        subscriptionId: String(subscription._id),
+        status: subscription.status,
+      });
+      // Stay permissive in unseeded dev; in production fail SAFE to the real
+      // Free plan (or a conservative floor) so a broken reference can never
+      // hand out unlimited usage.
       if (!isProduction) return UNRESTRICTED;
       const freePlan = await planRepository.findFreeActivePlan();
       return freePlan ? this.entitlementsFromPlan(freePlan) : FREE_FALLBACK;
     }
-    return this.entitlementsFromPlan(plan, subscription?.bonus);
+    return this.entitlementsFromPlan(plan, subscription.bonus);
   }
 
   /** Build a workspace's limits + feature switches from a plan (+ optional bonus). */
@@ -372,7 +380,9 @@ class SubscriptionService {
     const access = await this.getAccessState(workspaceId);
     if (!access.allowed) {
       throw new AppError(
-        'Your subscription is inactive. Choose a plan from Billing to keep replying.',
+        access.reason === 'NO_PLAN'
+          ? "You don't have an active plan yet. Choose one from Billing to start replying."
+          : 'Your subscription is inactive. Choose a plan from Billing to keep replying.',
         HttpStatus.FORBIDDEN,
         { errorCode: 'SUBSCRIPTION_EXPIRED' }
       );
@@ -388,14 +398,18 @@ class SubscriptionService {
   }
 
   /**
-   * Self-serve plan switch — upgrades AND downgrades activate instantly, no
-   * payment step (Razorpay stays dormant until enabled). Paid plans get their
-   * normal validity period, after which the lazy lapse check in
-   * getAccessState() drops the workspace back to Free automatically.
+   * Self-serve switch to a FREE plan (instant, no charge). Paid plans must go
+   * through checkout/subscription — activating them here would hand out paid
+   * periods for free (payments are live now, so money must match access).
    */
   async choosePlan(user: AuthUser, planId: string): Promise<ISubscription> {
     const plan = await planRepository.findById(planId);
     if (!plan || !plan.isActive) throw new NotFoundError('Plan not found');
+    if (plan.priceAmount > 0 && paymentService.isConfigured()) {
+      throw new BadRequestError(
+        `${plan.name} is a paid plan — complete the payment from Billing to activate it.`
+      );
+    }
 
     const now = new Date();
     // Bonuses are scoped to the plan they were granted on; switching drops them.
@@ -1034,9 +1048,11 @@ export async function requireActiveSubscription(
     const state = await subscriptionService.getAccessState(req.user!.workspaceId);
     if (!state.allowed) {
       throw new AppError(
-        state.reason === 'TRIAL_EXPIRED'
-          ? 'Your free trial has ended. Choose a plan to keep going.'
-          : 'Your subscription is inactive. Choose a plan to continue.',
+        state.reason === 'NO_PLAN'
+          ? "You don't have an active plan yet. Choose one from Billing to get started."
+          : state.reason === 'TRIAL_EXPIRED'
+            ? 'Your free trial has ended. Choose a plan to keep going.'
+            : 'Your subscription is inactive. Choose a plan to continue.',
         HttpStatus.FORBIDDEN,
         { errorCode: 'SUBSCRIPTION_EXPIRED' }
       );

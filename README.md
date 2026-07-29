@@ -20,8 +20,8 @@ Clean modular monolith: **Node + Express + TypeScript + MongoDB/Mongoose**, with
 cd backend
 cp .env.example .env          # fill in values (or keep stubs for local dev)
 npm install
-npm run seed:plans            # seed Free/Starter/Pro plans (needs MongoDB)
 npm run dev                   # start with hot reload
+# Plans are created in the app: sign in as a super admin → Admin → Plans.
 ```
 
 Build & run production:
@@ -64,9 +64,9 @@ token-refresh cron ([api/cron/refresh-tokens.ts](api/cron/refresh-tokens.ts)).
    - `META_OAUTH_REDIRECT_URI` — the deployed callback URL
      (`https://<backend-domain>/api/v1/accounts/oauth/callback`).
 3. Deploy (`npx vercel --prod` from `backend/`, or connect the repo).
-4. Run `npm run seed:plans` once from your machine with `MONGODB_URI` pointing at the
-   production database (indexes too: `autoIndex` is off in production, so create any
-   missing indexes manually or via a one-off run).
+4. Create your plans in the app (Admin → Plans, then Sync each paid plan with
+   Razorpay). Indexes: `autoIndex` is off in production, so run
+   `npm run db:sync-indexes` once with `MONGODB_URI` pointing at production.
 
 Serverless caveats:
 
@@ -93,7 +93,7 @@ src/
                   email/Brevo, meta/Graph API)
   controllers/    thin HTTP handlers (asyncHandler-wrapped)
   routes/         Express routers mounted under API_PREFIX
-  scripts/        seedPlans, refreshTokens (cron-friendly)
+  scripts/        refreshTokens, syncRazorpayPlans, promoteAdmin (cron/ops)
   app.ts          express app assembly
   server.ts       bootstrap + graceful shutdown
 ```

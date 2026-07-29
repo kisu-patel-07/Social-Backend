@@ -1,19 +1,8 @@
 import { Types } from 'mongoose';
 import { env } from '../config/env';
-import {
-  ActivityAction,
-  AuthProvider,
-  SubscriptionStatus,
-  TokenType,
-  UserRole,
-} from '../constants';
+import { ActivityAction, AuthProvider, TokenType, UserRole } from '../constants';
 import { IUser } from '../models/user.model';
-import {
-  planRepository,
-  subscriptionRepository,
-  userRepository,
-  workspaceRepository,
-} from '../repositories';
+import { userRepository, workspaceRepository } from '../repositories';
 import { AuthTokens, JwtPayload } from '../types/auth.types';
 import { HttpStatus } from '../constants/httpStatus';
 import {
@@ -23,7 +12,6 @@ import {
   NotFoundError,
   UnauthorizedError,
 } from '../utils/AppError';
-import { addDays } from '../utils/date';
 import {
   signAccessToken,
   signEmailToken,
@@ -37,7 +25,6 @@ import { generateOtp, hashOtp, verifyOtp } from '../utils/otp';
 import { comparePassword, hashPassword } from '../utils/password';
 import { verifyTotpCode } from '../utils/totp';
 import { activityService } from './activity.service';
-import { planPeriodEnd } from './subscription.service';
 import { emailService } from './email/email.service';
 
 interface RegisterParams {
@@ -99,27 +86,17 @@ class AuthService {
     };
   }
 
-  /** Create a workspace + default trial subscription for a brand-new user. */
+  /**
+   * Create the workspace for a brand-new user. Deliberately WITHOUT any
+   * subscription: new accounts start with no active plan (billing shows
+   * "no active plan", automations stay paused) until they pick one — free
+   * plans activate instantly, paid plans go through checkout.
+   */
   private async bootstrapWorkspace(name: string, ownerId: Types.ObjectId): Promise<Types.ObjectId> {
     const workspace = await workspaceRepository.create({
       name,
       owner: ownerId,
     });
-
-    // Every new workspace starts on the default plan with its FIRST period
-    // free of charge: a ₹0 plan never lapses; a paid default runs one normal
-    // period, after which the user renews at the plan's price at that time.
-    const plan = await planRepository.findDefaultSignupPlan();
-    if (plan) {
-      await subscriptionRepository.create({
-        workspace: workspace._id,
-        plan: plan._id,
-        status: SubscriptionStatus.ACTIVE,
-        currentPeriodStart: new Date(),
-        currentPeriodEnd: plan.priceAmount > 0 ? planPeriodEnd(plan) : addDays(new Date(), 3650),
-      });
-    }
-
     return workspace._id;
   }
 

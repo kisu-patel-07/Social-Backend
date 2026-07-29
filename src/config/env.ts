@@ -7,7 +7,7 @@ import { z } from 'zod';
 //   real host/shell env  >  .env.<NODE_ENV>  >  .env
 // This lets a hosting platform's dashboard variables always win, and lets you
 // target a specific environment for a one-off command locally, e.g.:
-//   NODE_ENV=production npm run seed:plans
+//   NODE_ENV=production npm run subs:check
 const nodeEnv = process.env.NODE_ENV ?? 'development';
 const envFileResult = dotenv.config({ path: `.env.${nodeEnv}` });
 dotenv.config();
