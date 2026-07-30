@@ -19,6 +19,7 @@ import { IContactMessage } from '../models/contactMessage.model';
 import { IActivityLog } from '../models/activityLog.model';
 import { IMessage } from '../models/message.model';
 import { IPayment } from '../models/payment.model';
+import { IInvoice } from '../models/invoice.model';
 import { IPlan } from '../models/plan.model';
 import { ISocialAccount } from '../models/socialAccount.model';
 import { ISubscription } from '../models/subscription.model';
@@ -230,6 +231,36 @@ export interface AdminAnalytics {
    * the previous one in spirit (workspace-level checks from "connected" on).
    */
   funnel: Array<{ step: string; count: number }>;
+  /** Collected revenue per month, last 12 months (SUCCEEDED payments, this app). */
+  revenueMonthly: Array<{ month: string; amount: number; payments: number }>;
+  /** New paid activations vs cancellations per month, last 12 months. */
+  subscriberFlow: Array<{ month: string; started: number; cancelled: number }>;
+  /** Currency the revenue series is denominated in (first seen; INR default). */
+  currency: string;
+}
+
+/** One row in the admin subscription-lifecycle lists. */
+export interface LifecycleRow {
+  id: string;
+  workspaceName: string;
+  planName: string;
+  priceAmount: number;
+  currency: string;
+  currentPeriodEnd: Date;
+  canceledAt?: Date;
+  /** True when a Razorpay mandate will charge automatically. */
+  autoRenew: boolean;
+  status: SubscriptionStatus;
+}
+
+/** Churn radar + renewal forecast + dunning for the admin Billing page. */
+export interface AdminBillingInsights {
+  /** Cancelled but still running — ends at currentPeriodEnd. */
+  pendingCancellations: LifecycleRow[];
+  /** Paid subscriptions whose period ends within the next 7 days. */
+  upcomingRenewals: LifecycleRow[];
+  /** Renewal charge failed; Razorpay is retrying (status PAST_DUE). */
+  pastDue: LifecycleRow[];
 }
 
 /** Everything the admin workspace drill-in page needs in one request. */
@@ -709,6 +740,69 @@ class AdminService {
       { path: 'workspace', select: 'name' },
       { path: 'plan', select: 'code name priceAmount currency interval' },
     ]);
+  }
+
+  /**
+   * Churn radar + renewal forecast + dunning, in one call. Everything here is
+   * actionable: pending cancellations can be saved before they end, upcoming
+   * renewals are next week's revenue, and past-due rows are failing charges.
+   */
+  async getBillingInsights(): Promise<AdminBillingInsights> {
+    const now = new Date();
+    const week = new Date(now.getTime() + 7 * DAY_MS);
+    const populate = [
+      { path: 'workspace' as const, select: 'name' },
+      { path: 'plan' as const, select: 'name priceAmount currency' },
+    ];
+
+    const toRow = (s: ISubscription): LifecycleRow => {
+      const ws = s.workspace as unknown as { name?: string };
+      const plan = s.plan as unknown as { name?: string; priceAmount?: number; currency?: string };
+      return {
+        id: s._id.toString(),
+        workspaceName: ws?.name ?? 'Unknown workspace',
+        planName: plan?.name ?? 'Unknown plan',
+        priceAmount: plan?.priceAmount ?? 0,
+        currency: plan?.currency ?? 'INR',
+        currentPeriodEnd: s.currentPeriodEnd,
+        canceledAt: s.canceledAt,
+        autoRenew: Boolean(s.externalSubscriptionId) && !s.cancelAtPeriodEnd,
+        status: s.status,
+      };
+    };
+
+    const [cancellations, renewals, pastDue] = await Promise.all([
+      subscriptionRepository.find(
+        {
+          cancelAtPeriodEnd: true,
+          status: { $in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE] },
+          currentPeriodEnd: { $gte: now },
+        },
+        undefined,
+        { sort: { currentPeriodEnd: 1 }, limit: 50, populate }
+      ),
+      subscriptionRepository.find(
+        {
+          status: SubscriptionStatus.ACTIVE,
+          cancelAtPeriodEnd: { $ne: true },
+          currentPeriodEnd: { $gte: now, $lte: week },
+        },
+        undefined,
+        { sort: { currentPeriodEnd: 1 }, limit: 50, populate }
+      ),
+      subscriptionRepository.find({ status: SubscriptionStatus.PAST_DUE }, undefined, {
+        sort: { currentPeriodEnd: 1 },
+        limit: 50,
+        populate,
+      }),
+    ]);
+
+    return {
+      pendingCancellations: cancellations.map(toRow),
+      // Only PAID periods count as revenue events; free plans never lapse.
+      upcomingRenewals: renewals.map(toRow).filter((r) => r.priceAmount > 0),
+      pastDue: pastDue.map(toRow),
+    };
   }
 
   async updateSubscription(
@@ -1545,9 +1639,22 @@ class AdminService {
     ]);
   }
 
+  listInvoices(
+    filters: PaginationOptions & { status?: string; search?: string }
+  ): Promise<PaginatedResult<IInvoice>> {
+    const query: FilterQuery<IInvoice> = {};
+    if (filters.status) query.status = filters.status;
+    if (filters.search) query.number = containsRegex(filters.search);
+    return invoiceRepository.paginate(query, filters, undefined, [
+      { path: 'workspace', select: 'name' },
+    ]);
+  }
+
   /**
-   * Bookkeeping refund: marks the payment refunded and comps nothing else.
-   * When a real gateway lands, its refund API call slots in right here.
+   * Refund a payment. When it was collected through Razorpay (and the gateway
+   * is configured), the money is actually sent back via the refund API before
+   * we mark it refunded locally; gateway refusal aborts the whole operation.
+   * Payments recorded without a gateway id stay bookkeeping-only.
    */
   async refundPayment(actor: AuthUser, id: string): Promise<IPayment> {
     const payment = await paymentRepository.findById(id);
@@ -1556,11 +1663,22 @@ class AdminService {
       throw new BadRequestError('Only succeeded payments can be refunded');
     }
 
+    let providerRefundId: string | undefined;
+    if (
+      payment.provider === 'razorpay' &&
+      payment.providerPaymentId &&
+      paymentService.isConfigured()
+    ) {
+      const result = await paymentService.refundPayment(payment.providerPaymentId);
+      providerRefundId = result.refundId;
+    }
+
     const updated = await paymentRepository.updateById(payment._id, {
       $set: {
         status: PaymentStatus.REFUNDED,
         refundedAt: new Date(),
         refundedBy: new Types.ObjectId(actor.id),
+        ...(providerRefundId ? { providerRefundId } : {}),
       },
     });
     if (!updated) throw new NotFoundError('Payment not found');
@@ -1573,7 +1691,9 @@ class AdminService {
       workspace: payment.workspace.toString(),
       user: actor.id,
       action: ActivityAction.ADMIN_PAYMENT_REFUNDED,
-      description: `${actor.email} marked a ${(payment.amount / 100).toFixed(2)} ${payment.currency} payment as refunded`,
+      description: providerRefundId
+        ? `${actor.email} refunded a ${(payment.amount / 100).toFixed(2)} ${payment.currency} payment via Razorpay (${providerRefundId})`
+        : `${actor.email} marked a ${(payment.amount / 100).toFixed(2)} ${payment.currency} payment as refunded`,
       entityType: 'Payment',
       entityId: payment._id,
     });
@@ -1767,6 +1887,61 @@ class AdminService {
       { step: 'Captured a lead', count: leadWs.length },
     ];
 
+    // Revenue + subscriber movement, last 12 calendar months.
+    const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+    const byMonth = { $dateToString: { format: '%Y-%m', date: '$createdAt' } };
+    const [revenueAgg, startedAgg, cancelledAgg, currencyDoc] = await Promise.all([
+      paymentRepository.aggregate<{ _id: string; amount: number; payments: number }>([
+        {
+          $match: {
+            status: PaymentStatus.SUCCEEDED,
+            app: env.APP_ID,
+            createdAt: { $gte: twelveMonthsAgo },
+          },
+        },
+        { $group: { _id: byMonth, amount: { $sum: '$amount' }, payments: { $sum: 1 } } },
+      ]),
+      // Paid activations = successful payments' distinct workspaces per month.
+      paymentRepository.aggregate<{ _id: string; started: number }>([
+        {
+          $match: {
+            status: PaymentStatus.SUCCEEDED,
+            app: env.APP_ID,
+            createdAt: { $gte: twelveMonthsAgo },
+          },
+        },
+        { $group: { _id: { m: byMonth, w: '$workspace' } } },
+        { $group: { _id: '$_id.m', started: { $sum: 1 } } },
+      ]),
+      subscriptionRepository.aggregate<{ _id: string; cancelled: number }>([
+        { $match: { canceledAt: { $gte: twelveMonthsAgo } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m', date: '$canceledAt' } },
+            cancelled: { $sum: 1 },
+          },
+        },
+      ]),
+      paymentRepository.findOne({ status: PaymentStatus.SUCCEEDED, app: env.APP_ID }),
+    ]);
+
+    const revenueMap = new Map(revenueAgg.map((r) => [r._id, r]));
+    const startedMap = new Map(startedAgg.map((r) => [r._id, r.started]));
+    const cancelledMap = new Map(cancelledAgg.map((r) => [r._id, r.cancelled]));
+    const revenueMonthly: AdminAnalytics['revenueMonthly'] = [];
+    const subscriberFlow: AdminAnalytics['subscriberFlow'] = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const rev = revenueMap.get(key);
+      revenueMonthly.push({ month: key, amount: rev?.amount ?? 0, payments: rev?.payments ?? 0 });
+      subscriberFlow.push({
+        month: key,
+        started: startedMap.get(key) ?? 0,
+        cancelled: cancelledMap.get(key) ?? 0,
+      });
+    }
+
     return {
       daily,
       planDistribution: planDist.map((p) => ({
@@ -1782,6 +1957,9 @@ class AdminService {
         leads: leadCountMap.get(t._id.toString()) ?? 0,
       })),
       funnel,
+      revenueMonthly,
+      subscriberFlow,
+      currency: currencyDoc?.currency ?? 'INR',
     };
   }
 

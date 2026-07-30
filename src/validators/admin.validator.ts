@@ -139,6 +139,14 @@ export const adminListPaymentsSchema = z.object({
   }),
 });
 
+/** GET /admin/invoices */
+export const adminListInvoicesSchema = z.object({
+  query: paginationQuerySchema.extend({
+    status: z.string().optional(),
+    search: z.string().optional(),
+  }),
+});
+
 /** PATCH /admin/features/:key */
 export const adminUpdateFeatureSchema = z.object({
   params: z.object({

@@ -26,9 +26,11 @@ export interface IPayment extends Document {
   method?: string;
   failureReason?: string;
   paidAt?: Date;
-  /** Set when an admin marks the payment refunded (bookkeeping until a gateway exists). */
+  /** Set when an admin refunds the payment. */
   refundedAt?: Date;
   refundedBy?: Types.ObjectId;
+  /** Gateway refund id (Razorpay rfnd_…) when money actually moved back. */
+  providerRefundId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -58,6 +60,7 @@ const paymentSchema = new Schema<IPayment>(
     paidAt: { type: Date },
     refundedAt: { type: Date },
     refundedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    providerRefundId: { type: String },
   },
   { timestamps: true }
 );

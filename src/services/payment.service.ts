@@ -228,6 +228,24 @@ class PaymentService {
   }
 
   /**
+   * Refund a captured payment at Razorpay — this MOVES MONEY back to the
+   * customer (normal speed: 5–7 business days). Full refund when no amount is
+   * given. Returns the gateway refund id for the audit trail.
+   */
+  async refundPayment(razorpayPaymentId: string, amount?: number): Promise<{ refundId: string }> {
+    const client = this.getClient();
+    try {
+      const refund = await client.payments.refund(razorpayPaymentId, {
+        ...(amount ? { amount } : {}),
+        speed: 'normal',
+      });
+      return { refundId: String(refund.id) };
+    } catch (error) {
+      throw this.gatewayError(error, 'refund', 'could not refund the payment');
+    }
+  }
+
+  /**
    * Verify a subscription checkout signature. NOTE the operand order differs
    * from one-time orders: HMAC-SHA256(payment_id|subscription_id).
    */

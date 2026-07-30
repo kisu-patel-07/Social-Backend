@@ -123,6 +123,11 @@ export const adminController = {
     sendSuccess(res, subscription, 'Subscription updated');
   }),
 
+  billingInsights: asyncHandler(async (_req: Request, res: Response) => {
+    const insights = await adminService.getBillingInsights();
+    sendSuccess(res, insights);
+  }),
+
   grantBonus: asyncHandler(async (req: Request, res: Response) => {
     const subscription = await adminService.grantBonus(req.user!, req.params.id, req.body);
     const removed = !subscription.bonus;
@@ -228,7 +233,21 @@ export const adminController = {
 
   refundPayment: asyncHandler(async (req: Request, res: Response) => {
     const payment = await adminService.refundPayment(req.user!, req.params.id);
-    sendSuccess(res, payment, 'Payment marked as refunded');
+    sendSuccess(
+      res,
+      payment,
+      payment.providerRefundId ? 'Refund sent to the customer' : 'Payment marked as refunded'
+    );
+  }),
+
+  listInvoices: asyncHandler(async (req: Request, res: Response) => {
+    const options = buildPaginationOptions(req.query);
+    const result = await adminService.listInvoices({
+      ...options,
+      status: req.query.status as string | undefined,
+      search: req.query.search as string | undefined,
+    });
+    sendPaginated(res, result.items, result.meta);
   }),
 
   // ---- Feature flags ----------------------------------------------------------------

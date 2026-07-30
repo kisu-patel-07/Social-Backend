@@ -991,6 +991,16 @@ class SubscriptionService {
     const subscription = await this.findByRazorpaySubscription(id);
     if (!subscription) return;
 
+    // PAST_DUE keeps access alive through the retry window AND makes the
+    // subscription visible in the admin dunning list; the next successful
+    // charge (subscription.charged → recordPaidActivation) flips it back to
+    // ACTIVE automatically.
+    if (subscription.status === SubscriptionStatus.ACTIVE) {
+      await subscriptionRepository.updateById(subscription._id, {
+        $set: { status: SubscriptionStatus.PAST_DUE },
+      });
+    }
+
     await this.notifyWorkspaceOwner(
       subscription.workspace.toString(),
       'Your renewal payment did not go through',

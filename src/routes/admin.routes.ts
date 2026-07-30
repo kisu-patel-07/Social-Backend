@@ -16,6 +16,7 @@ import {
   adminListDemoRequestsSchema,
   adminUpdateDemoRequestSchema,
   adminListAutomationsSchema,
+  adminListInvoicesSchema,
   adminListPaymentsSchema,
   adminListSubscriptionsSchema,
   adminListUsersSchema,
@@ -76,6 +77,7 @@ router.get(
   validate(adminListSubscriptionsSchema),
   adminController.listSubscriptions
 );
+router.get('/billing-insights', adminController.billingInsights);
 router.patch(
   '/subscriptions/:id',
   validate(adminUpdateSubscriptionSchema),
@@ -121,13 +123,14 @@ router.post(
 // Broadcast announcements
 router.post('/broadcast', validate(adminBroadcastSchema), adminController.broadcast);
 
-// Payments (bookkeeping refunds until a gateway is integrated)
+// Payments (refunds go through Razorpay when the payment carries a gateway id)
 router.get('/payments', validate(adminListPaymentsSchema), adminController.listPayments);
 router.patch(
   '/payments/:id/refund',
   validate(z.object({ params: idParamSchema })),
   adminController.refundPayment
 );
+router.get('/invoices', validate(adminListInvoicesSchema), adminController.listInvoices);
 
 // Demo-call requests (public form -> admin follow-up)
 router.get(
