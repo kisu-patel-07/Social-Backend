@@ -180,6 +180,7 @@ router.post(
 
 // Users CSV export
 router.get('/users-export', adminController.exportUsersCsv);
+router.get('/activity-export', adminController.exportActivityCsv);
 
 // Maintenance banner
 router.get('/banner', adminController.getBanner);

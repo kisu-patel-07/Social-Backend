@@ -221,6 +221,11 @@ export interface AdminAnalytics {
   daily: Array<{ date: string; signups: number; messages: number; leads: number }>;
   planDistribution: Array<{ planId: string; code: string; name: string; count: number }>;
   topWorkspaces: Array<{ workspaceId: string; name: string; messages30d: number; leads: number }>;
+  /**
+   * Lifetime activation funnel: how far signups get. Each step is a subset of
+   * the previous one in spirit (workspace-level checks from "connected" on).
+   */
+  funnel: Array<{ step: string; count: number }>;
 }
 
 /** A row in the admin workspaces directory. */
@@ -1591,6 +1596,30 @@ class AdminService {
     ]);
     const leadCountMap = new Map(leadCounts.map((l) => [l._id.toString(), l.count]));
 
+    // Activation funnel (lifetime): signups → verified → connected an account
+    // → created an automation → captured a lead. Steps from "connected" on are
+    // workspace-level (this product is effectively one workspace per user).
+    const distinctWs = { $group: { _id: '$workspace' } };
+    const [totalUsers, verifiedUsers, accountWs, classicWs, studioWs, leadWs] = await Promise.all([
+      userRepository.count({}),
+      userRepository.count({ isEmailVerified: true }),
+      socialAccountRepository.aggregate<{ _id: Types.ObjectId }>([distinctWs]),
+      automationRepository.aggregate<{ _id: Types.ObjectId }>([distinctWs]),
+      studioAutomationRepository.aggregate<{ _id: Types.ObjectId }>([distinctWs]),
+      leadRepository.aggregate<{ _id: Types.ObjectId }>([distinctWs]),
+    ]);
+    const automationWorkspaces = new Set([
+      ...classicWs.map((w) => w._id.toString()),
+      ...studioWs.map((w) => w._id.toString()),
+    ]);
+    const funnel: AdminAnalytics['funnel'] = [
+      { step: 'Signed up', count: totalUsers },
+      { step: 'Verified email', count: verifiedUsers },
+      { step: 'Connected an account', count: accountWs.length },
+      { step: 'Created an automation', count: automationWorkspaces.size },
+      { step: 'Captured a lead', count: leadWs.length },
+    ];
+
     return {
       daily,
       planDistribution: planDist.map((p) => ({
@@ -1605,7 +1634,34 @@ class AdminService {
         messages30d: t.messages30d,
         leads: leadCountMap.get(t._id.toString()) ?? 0,
       })),
+      funnel,
     };
+  }
+
+  /** Audit-log CSV export (newest first, optional action filter, 20k cap). */
+  async exportActivityCsv(action?: string): Promise<string> {
+    const logs = await activityLogRepository.find(action ? { action } : {}, undefined, {
+      sort: { createdAt: -1 },
+      limit: 20000,
+      populate: [
+        { path: 'workspace', select: 'name' },
+        { path: 'user', select: 'email' },
+      ],
+    });
+
+    const columns: CsvColumn<IActivityLog>[] = [
+      { header: 'Date', value: (l) => l.createdAt.toISOString() },
+      { header: 'Action', value: (l) => l.action },
+      { header: 'Description', value: (l) => l.description },
+      {
+        header: 'Workspace',
+        value: (l) => (l.workspace as unknown as { name?: string })?.name ?? '',
+      },
+      { header: 'User', value: (l) => (l.user as unknown as { email?: string })?.email ?? '' },
+      { header: 'Entity Type', value: (l) => l.entityType ?? '' },
+      { header: 'Entity Id', value: (l) => (l.entityId ? String(l.entityId) : '') },
+    ];
+    return toCsv(logs, columns);
   }
 
   // ---- Workspaces directory -------------------------------------------------------

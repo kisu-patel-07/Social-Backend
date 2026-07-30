@@ -275,6 +275,17 @@ export const adminController = {
     res.status(200).send(csv);
   }),
 
+  // ---- Audit-log CSV export --------------------------------------------------------------
+  exportActivityCsv: asyncHandler(async (req: Request, res: Response) => {
+    const csv = await adminService.exportActivityCsv(req.query.action as string | undefined);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="activity-${toDateKey(new Date())}.csv"`
+    );
+    res.status(200).send(csv);
+  }),
+
   // ---- Maintenance banner -----------------------------------------------------------------
   getBanner: asyncHandler(async (_req: Request, res: Response) => {
     const banner = await adminService.getBanner();
