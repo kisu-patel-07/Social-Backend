@@ -25,3 +25,12 @@ export { InvoiceModel, IInvoice } from './invoice.model';
 export { PaymentModel, IPayment } from './payment.model';
 export { RateLimitModel, IRateLimit } from './rateLimit.model';
 export { FlowRunModel, IFlowRun } from './flowRun.model';
+export { ContactMessageModel, IContactMessage } from './contactMessage.model';
+export { WebhookEventModel, IWebhookEvent } from './webhookEvent.model';
+export { JobRunModel, IJobRun } from './jobRun.model';
+export {
+  CouponModel,
+  ICoupon,
+  CouponRedemptionModel,
+  ICouponRedemption,
+} from './coupon.model';
