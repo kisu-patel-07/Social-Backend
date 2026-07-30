@@ -6,6 +6,7 @@ import {
   AutomationStatus,
   BillingInterval,
   ContactMessageStatus,
+  CouponType,
   MessageDirection,
   MessageStatus,
   NotificationType,
@@ -20,6 +21,7 @@ import { IActivityLog } from '../models/activityLog.model';
 import { IMessage } from '../models/message.model';
 import { IPayment } from '../models/payment.model';
 import { IInvoice } from '../models/invoice.model';
+import { ICoupon, ICouponRedemption } from '../models/coupon.model';
 import { IPlan } from '../models/plan.model';
 import { ISocialAccount } from '../models/socialAccount.model';
 import { ISubscription } from '../models/subscription.model';
@@ -44,6 +46,8 @@ import {
   automationRepository,
   contactMessageRepository,
   conversationRepository,
+  couponRedemptionRepository,
+  couponRepository,
   invoiceRepository,
   jobRunRepository,
   keywordRepository,
@@ -568,8 +572,7 @@ class AdminService {
         plan: plan._id,
         status: SubscriptionStatus.ACTIVE,
         currentPeriodStart: now,
-        currentPeriodEnd:
-          plan.priceAmount > 0 ? planPeriodEnd(plan, now) : addDays(now, 3650),
+        currentPeriodEnd: plan.priceAmount > 0 ? planPeriodEnd(plan, now) : addDays(now, 3650),
       });
     }
 
@@ -1093,6 +1096,173 @@ class AdminService {
       entityType: 'Plan',
       entityId: plan._id,
     });
+  }
+
+  // ---- Coupons (one-time discount codes) --------------------------------------
+
+  listCoupons(
+    filters: PaginationOptions & { search?: string; active?: boolean }
+  ): Promise<PaginatedResult<ICoupon>> {
+    const query: FilterQuery<ICoupon> = {};
+    if (filters.search) query.code = containsRegex(filters.search);
+    if (typeof filters.active === 'boolean') query.isActive = filters.active;
+    return couponRepository.paginate(query, filters, undefined, [
+      { path: 'plans', select: 'name code' },
+    ]);
+  }
+
+  async createCoupon(
+    actor: AuthUser,
+    input: {
+      code: string;
+      description?: string;
+      type: CouponType;
+      value: number;
+      currency?: string;
+      maxRedemptions?: number;
+      plans?: string[];
+      expiresAt?: string;
+      isActive?: boolean;
+    }
+  ): Promise<ICoupon> {
+    const code = input.code.trim().toUpperCase();
+    if (await couponRepository.findByCode(code)) {
+      throw new ConflictError(`The code ${code} is already in use. Pick a different one.`);
+    }
+    this.assertCouponValue(input.type, input.value);
+
+    const coupon = await couponRepository.create({
+      code,
+      description: input.description,
+      type: input.type,
+      value: input.value,
+      currency: input.type === CouponType.FLAT ? (input.currency ?? 'INR') : undefined,
+      maxRedemptions: input.maxRedemptions,
+      plans: (input.plans ?? []).map((p) => new Types.ObjectId(p)),
+      expiresAt: input.expiresAt ? new Date(input.expiresAt) : undefined,
+      isActive: input.isActive ?? true,
+      createdBy: new Types.ObjectId(actor.id),
+    });
+
+    await activityService.log({
+      workspace: actor.workspaceId,
+      user: actor.id,
+      action: ActivityAction.ADMIN_COUPON_CREATED,
+      description: `${actor.email} created coupon ${code}`,
+      entityType: 'Coupon',
+      entityId: coupon._id,
+    });
+    return coupon;
+  }
+
+  async updateCoupon(
+    actor: AuthUser,
+    id: string,
+    input: {
+      description?: string;
+      type?: CouponType;
+      value?: number;
+      currency?: string;
+      maxRedemptions?: number | null;
+      plans?: string[];
+      expiresAt?: string | null;
+      isActive?: boolean;
+    }
+  ): Promise<ICoupon> {
+    const coupon = await couponRepository.findById(id);
+    if (!coupon) throw new NotFoundError('Coupon not found');
+
+    const type = input.type ?? coupon.type;
+    const value = input.value ?? coupon.value;
+    if (input.type !== undefined || input.value !== undefined) this.assertCouponValue(type, value);
+    if (input.maxRedemptions != null && input.maxRedemptions < coupon.redemptionCount) {
+      throw new BadRequestError(
+        `This coupon has already been used ${coupon.redemptionCount} time${coupon.redemptionCount === 1 ? '' : 's'}, so the limit can't be lower than that.`
+      );
+    }
+
+    const $set: Record<string, unknown> = {};
+    const $unset: Record<string, ''> = {};
+    if (input.description !== undefined) $set.description = input.description;
+    if (input.type !== undefined) $set.type = input.type;
+    if (input.value !== undefined) $set.value = input.value;
+    if (input.isActive !== undefined) $set.isActive = input.isActive;
+    if (input.plans !== undefined) $set.plans = input.plans.map((p) => new Types.ObjectId(p));
+    if (input.currency !== undefined) $set.currency = input.currency;
+    if (type === CouponType.PERCENT) $unset.currency = '';
+    // null clears the limit / expiry ("unlimited", "never expires").
+    if (input.maxRedemptions === null) $unset.maxRedemptions = '';
+    else if (input.maxRedemptions !== undefined) $set.maxRedemptions = input.maxRedemptions;
+    if (input.expiresAt === null) $unset.expiresAt = '';
+    else if (input.expiresAt !== undefined) $set.expiresAt = new Date(input.expiresAt);
+
+    const updated = await couponRepository.updateById(coupon._id, {
+      ...(Object.keys($set).length ? { $set } : {}),
+      ...(Object.keys($unset).length ? { $unset } : {}),
+    });
+    if (!updated) throw new NotFoundError('Coupon not found');
+
+    await activityService.log({
+      workspace: actor.workspaceId,
+      user: actor.id,
+      action: ActivityAction.ADMIN_COUPON_UPDATED,
+      description: `${actor.email} updated coupon ${coupon.code}`,
+      entityType: 'Coupon',
+      entityId: coupon._id,
+    });
+    return updated;
+  }
+
+  /**
+   * Delete a coupon. Refused once it has been redeemed — the redemption
+   * records point at it and are the audit trail for money already discounted.
+   * Switching it off stops new uses without breaking that history.
+   */
+  async deleteCoupon(actor: AuthUser, id: string): Promise<void> {
+    const coupon = await couponRepository.findById(id);
+    if (!coupon) throw new NotFoundError('Coupon not found');
+
+    const redemptions = await couponRedemptionRepository.count({ coupon: coupon._id });
+    if (redemptions > 0) {
+      throw new ConflictError(
+        `${coupon.code} has already been used ${redemptions} time${redemptions === 1 ? '' : 's'}, so it can't be deleted. Switch it off instead — nobody new can use it, and your records stay intact.`
+      );
+    }
+
+    await couponRepository.deleteById(coupon._id);
+    await activityService.log({
+      workspace: actor.workspaceId,
+      user: actor.id,
+      action: ActivityAction.ADMIN_COUPON_DELETED,
+      description: `${actor.email} deleted coupon ${coupon.code}`,
+      entityType: 'Coupon',
+      entityId: coupon._id,
+    });
+  }
+
+  /** Who used a coupon, when, and how much it took off. */
+  listCouponRedemptions(
+    couponId: string,
+    filters: PaginationOptions
+  ): Promise<PaginatedResult<ICouponRedemption>> {
+    return couponRedemptionRepository.paginate(
+      { coupon: new Types.ObjectId(couponId) },
+      filters,
+      undefined,
+      [
+        { path: 'workspace', select: 'name' },
+        { path: 'plan', select: 'name code' },
+      ]
+    );
+  }
+
+  private assertCouponValue(type: CouponType, value: number): void {
+    if (type === CouponType.PERCENT && (value < 1 || value > 100)) {
+      throw new BadRequestError('A percentage discount must be between 1 and 100.');
+    }
+    if (type === CouponType.FLAT && value < 1) {
+      throw new BadRequestError('A fixed discount must be more than zero.');
+    }
   }
 
   // ---- Automation oversight ---------------------------------------------------
@@ -2131,11 +2301,13 @@ class AdminService {
 
   // ---- Users CSV export ----------------------------------------------------------------
 
-  async exportUsersCsv(filters: {
-    search?: string;
-    verified?: boolean;
-    suspended?: boolean;
-  } = {}): Promise<string> {
+  async exportUsersCsv(
+    filters: {
+      search?: string;
+      verified?: boolean;
+      suspended?: boolean;
+    } = {}
+  ): Promise<string> {
     // Honors the same filters as the users list, so "export what I'm looking at"
     // exports exactly that segment.
     const users = await userRepository.find(this.buildUserFilter(filters), undefined, {

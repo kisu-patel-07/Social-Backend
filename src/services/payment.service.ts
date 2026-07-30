@@ -109,6 +109,20 @@ class PaymentService {
     }
   }
 
+  /**
+   * Read an order back from Razorpay. Used at activation to learn what was
+   * ACTUALLY charged (a coupon order is created at the discounted amount) and
+   * to recover the notes we attached, without trusting the client.
+   */
+  async fetchOrder(orderId: string): Promise<{ amount: number; notes: Record<string, string> }> {
+    const client = this.getClient();
+    const order = await client.orders.fetch(orderId);
+    return {
+      amount: Number(order.amount),
+      notes: (order.notes ?? {}) as Record<string, string>,
+    };
+  }
+
   /** Normalize a Razorpay SDK error into an actionable AppError. */
   private gatewayError(error: unknown, context: string, fallback: string): AppError {
     const rzp = error as { statusCode?: number; error?: { description?: string; code?: string } };

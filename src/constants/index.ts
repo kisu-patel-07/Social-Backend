@@ -163,6 +163,12 @@ export enum PaymentStatus {
   REFUNDED = 'refunded',
 }
 
+/** Discount shape of a coupon: a share of the price, or a fixed amount off. */
+export enum CouponType {
+  PERCENT = 'percent',
+  FLAT = 'flat',
+}
+
 /** Lifecycle of a public contact-form submission in the admin support inbox. */
 export enum ContactMessageStatus {
   OPEN = 'open',
@@ -194,6 +200,10 @@ export enum ActivityAction {
   ADMIN_PLAN_UPDATED = 'admin.plan_updated',
   ADMIN_PLAN_DELETED = 'admin.plan_deleted',
   ADMIN_PLAN_SYNCED = 'admin.plan_synced',
+  ADMIN_COUPON_CREATED = 'admin.coupon_created',
+  ADMIN_COUPON_UPDATED = 'admin.coupon_updated',
+  ADMIN_COUPON_DELETED = 'admin.coupon_deleted',
+  COUPON_REDEEMED = 'coupon.redeemed',
   ADMIN_AUTOMATION_PAUSED = 'admin.automation_paused',
   ADMIN_AUTOMATION_RESUMED = 'admin.automation_resumed',
   ADMIN_WEBHOOK_RETRIED = 'admin.webhook_retried',

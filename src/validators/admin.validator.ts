@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   BillingInterval,
+  CouponType,
   DemoRequestStatus,
   PaymentStatus,
   SubscriptionStatus,
@@ -145,6 +146,49 @@ export const adminListInvoicesSchema = z.object({
     status: z.string().optional(),
     search: z.string().optional(),
   }),
+});
+
+// ---- Coupons -----------------------------------------------------------------
+
+const couponBodyBase = z.object({
+  code: z
+    .string()
+    .trim()
+    .min(3, 'A coupon code needs at least 3 characters.')
+    .max(40)
+    .regex(/^[A-Za-z0-9_-]+$/, 'Use letters, numbers, dashes or underscores only.'),
+  description: z.string().trim().max(200).optional(),
+  type: z.nativeEnum(CouponType),
+  /** PERCENT: 1–100. FLAT: amount off in the smallest currency unit. */
+  value: z.coerce.number().int().min(1).max(10000000),
+  currency: z.string().trim().length(3).toUpperCase().optional(),
+  maxRedemptions: z.coerce.number().int().min(1).max(1000000).optional(),
+  plans: z.array(objectIdSchema).max(50).optional(),
+  expiresAt: z.string().datetime().optional(),
+  isActive: z.boolean().optional(),
+});
+
+/** GET /admin/coupons */
+export const adminListCouponsSchema = z.object({
+  query: paginationQuerySchema.extend({
+    search: z.string().trim().max(40).optional(),
+    active: z.enum(['true', 'false']).optional(),
+  }),
+});
+
+/** POST /admin/coupons */
+export const adminCreateCouponSchema = z.object({ body: couponBodyBase });
+
+/** PATCH /admin/coupons/:id — everything optional; null clears limit/expiry. */
+export const adminUpdateCouponSchema = z.object({
+  params: idParamSchema,
+  body: couponBodyBase
+    .omit({ code: true, maxRedemptions: true, expiresAt: true })
+    .partial()
+    .extend({
+      maxRedemptions: z.coerce.number().int().min(1).max(1000000).nullable().optional(),
+      expiresAt: z.string().datetime().nullable().optional(),
+    }),
 });
 
 /** PATCH /admin/features/:key */

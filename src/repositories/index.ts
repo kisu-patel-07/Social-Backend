@@ -16,6 +16,7 @@ export { demoRequestRepository } from './demoRequest.repository';
 export { contactMessageRepository } from './contactMessage.repository';
 export { webhookEventRepository } from './webhookEvent.repository';
 export { jobRunRepository } from './jobRun.repository';
+export { couponRepository, couponRedemptionRepository } from './coupon.repository';
 export {
   planRepository,
   subscriptionRepository,

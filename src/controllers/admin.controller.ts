@@ -240,6 +240,38 @@ export const adminController = {
     );
   }),
 
+  // ---- Coupons ----------------------------------------------------------------
+  listCoupons: asyncHandler(async (req: Request, res: Response) => {
+    const options = buildPaginationOptions(req.query);
+    const result = await adminService.listCoupons({
+      ...options,
+      search: req.query.search as string | undefined,
+      active: req.query.active === undefined ? undefined : String(req.query.active) === 'true',
+    });
+    sendPaginated(res, result.items, result.meta);
+  }),
+
+  createCoupon: asyncHandler(async (req: Request, res: Response) => {
+    const coupon = await adminService.createCoupon(req.user!, req.body);
+    sendCreated(res, coupon, 'Coupon created');
+  }),
+
+  updateCoupon: asyncHandler(async (req: Request, res: Response) => {
+    const coupon = await adminService.updateCoupon(req.user!, req.params.id, req.body);
+    sendSuccess(res, coupon, 'Coupon updated');
+  }),
+
+  deleteCoupon: asyncHandler(async (req: Request, res: Response) => {
+    await adminService.deleteCoupon(req.user!, req.params.id);
+    sendSuccess(res, null, 'Coupon deleted');
+  }),
+
+  listCouponRedemptions: asyncHandler(async (req: Request, res: Response) => {
+    const options = buildPaginationOptions(req.query);
+    const result = await adminService.listCouponRedemptions(req.params.id, options);
+    sendPaginated(res, result.items, result.meta);
+  }),
+
   listInvoices: asyncHandler(async (req: Request, res: Response) => {
     const options = buildPaginationOptions(req.query);
     const result = await adminService.listInvoices({

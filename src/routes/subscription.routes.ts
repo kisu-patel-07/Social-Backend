@@ -7,6 +7,20 @@ import { objectIdSchema } from '../validators/common.validator';
 
 const planBodySchema = z.object({ body: z.object({ planId: objectIdSchema }) });
 
+const couponCodeSchema = z
+  .string()
+  .trim()
+  .min(3, 'Enter the coupon code.')
+  .max(40, 'That coupon code is too long.');
+
+const checkoutSchema = z.object({
+  body: z.object({ planId: objectIdSchema, couponCode: couponCodeSchema.optional() }),
+});
+
+const validateCouponSchema = z.object({
+  body: z.object({ planId: objectIdSchema, code: couponCodeSchema }),
+});
+
 const checkoutVerifySchema = z.object({
   body: z.object({
     planId: objectIdSchema,
@@ -36,7 +50,13 @@ router.get('/invoices', subscriptionController.invoices);
 // Self-serve: free plans switch instantly; paid plans pay via Razorpay checkout.
 // request-upgrade remains as the fallback while gateway keys are not configured.
 router.post('/choose', validate(planBodySchema), subscriptionController.choose);
-router.post('/checkout', validate(planBodySchema), subscriptionController.checkout);
+// One-time discount codes: priced here, re-priced again at checkout.
+router.post(
+  '/coupons/validate',
+  validate(validateCouponSchema),
+  subscriptionController.validateCoupon
+);
+router.post('/checkout', validate(checkoutSchema), subscriptionController.checkout);
 router.post(
   '/checkout/verify',
   validate(checkoutVerifySchema),

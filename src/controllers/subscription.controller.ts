@@ -1,5 +1,8 @@
 import { Request, Response } from 'express';
 import { subscriptionService } from '../services';
+import { couponService } from '../services/coupon.service';
+import { planRepository } from '../repositories';
+import { NotFoundError } from '../utils/AppError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess } from '../utils/apiResponse';
 
@@ -24,9 +27,29 @@ export const subscriptionController = {
     sendSuccess(res, subscription, 'Plan activated');
   }),
 
+  /** Price a coupon against a plan before the customer commits to paying. */
+  validateCoupon: asyncHandler(async (req: Request, res: Response) => {
+    const plan = await planRepository.findById(req.body.planId);
+    if (!plan || !plan.isActive) throw new NotFoundError('Plan not found');
+    const quote = await couponService.quote({
+      code: req.body.code,
+      plan,
+      workspaceId: req.user!.workspaceId,
+    });
+    sendSuccess(res, quote, `Coupon applied — ${quote.summary}`);
+  }),
+
   checkout: asyncHandler(async (req: Request, res: Response) => {
-    const order = await subscriptionService.createCheckout(req.user!, req.body.planId);
-    sendSuccess(res, order, 'Order created');
+    const order = await subscriptionService.createCheckout(
+      req.user!,
+      req.body.planId,
+      req.body.couponCode
+    );
+    sendSuccess(
+      res,
+      order,
+      order.free ? 'Your coupon covered the full price — plan activated 🎉' : 'Order created'
+    );
   }),
 
   checkoutVerify: asyncHandler(async (req: Request, res: Response) => {

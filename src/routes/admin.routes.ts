@@ -16,8 +16,11 @@ import {
   adminListDemoRequestsSchema,
   adminUpdateDemoRequestSchema,
   adminListAutomationsSchema,
+  adminCreateCouponSchema,
+  adminListCouponsSchema,
   adminListInvoicesSchema,
   adminListPaymentsSchema,
+  adminUpdateCouponSchema,
   adminListSubscriptionsSchema,
   adminListUsersSchema,
   adminListWorkspacesSchema,
@@ -131,6 +134,21 @@ router.patch(
   adminController.refundPayment
 );
 router.get('/invoices', validate(adminListInvoicesSchema), adminController.listInvoices);
+
+// Coupons (one-time discount codes)
+router.get('/coupons', validate(adminListCouponsSchema), adminController.listCoupons);
+router.post('/coupons', validate(adminCreateCouponSchema), adminController.createCoupon);
+router.get(
+  '/coupons/:id/redemptions',
+  validate(z.object({ params: idParamSchema })),
+  adminController.listCouponRedemptions
+);
+router.patch('/coupons/:id', validate(adminUpdateCouponSchema), adminController.updateCoupon);
+router.delete(
+  '/coupons/:id',
+  validate(z.object({ params: idParamSchema })),
+  adminController.deleteCoupon
+);
 
 // Demo-call requests (public form -> admin follow-up)
 router.get(

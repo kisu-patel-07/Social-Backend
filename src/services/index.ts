@@ -8,6 +8,7 @@ export { inboxService } from './inbox.service';
 export { analyticsService } from './analytics.service';
 export { settingsService } from './settings.service';
 export { subscriptionService } from './subscription.service';
+export { couponService } from './coupon.service';
 export { notificationService } from './notification.service';
 export { activityService } from './activity.service';
 export { adminService } from './admin.service';

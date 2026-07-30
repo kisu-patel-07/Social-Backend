@@ -17,6 +17,7 @@ import { IPlan } from '../models/plan.model';
 import { ISubscription } from '../models/subscription.model';
 import { IInvoice } from '../models/invoice.model';
 import {
+  couponRedemptionRepository,
   invoiceRepository,
   messageRepository,
   notificationRepository,
@@ -30,7 +31,31 @@ import { AuthUser } from '../types/auth.types';
 import { AppError, BadRequestError, NotFoundError } from '../utils/AppError';
 import { addDays } from '../utils/date';
 import { activityService } from './activity.service';
+import { couponService, CouponQuote } from './coupon.service';
 import { paymentService } from './payment.service';
+
+/**
+ * What `POST /subscriptions/checkout` returns. A coupon big enough to cover the
+ * whole price activates the plan immediately (`free: true`) — there is nothing
+ * for the customer to pay, so no Checkout is opened.
+ */
+export type CheckoutResponse =
+  | {
+      free: true;
+      planName: string;
+      currency: string;
+      discount: CouponQuote;
+      subscription: ISubscription;
+    }
+  | {
+      free?: false;
+      orderId: string;
+      amount: number;
+      currency: string;
+      keyId: string;
+      planName: string;
+      discount?: CouponQuote;
+    };
 
 /** Statuses that keep the product usable (PAST_DUE = payment grace period). */
 const ACCESS_STATUSES: SubscriptionStatus[] = [
@@ -645,22 +670,36 @@ class SubscriptionService {
    */
   async createCheckout(
     user: AuthUser,
-    planId: string
-  ): Promise<{
-    orderId: string;
-    amount: number;
-    currency: string;
-    keyId: string;
-    planName: string;
-  }> {
+    planId: string,
+    couponCode?: string
+  ): Promise<CheckoutResponse> {
     const plan = await planRepository.findById(planId);
     if (!plan || !plan.isActive) throw new NotFoundError('Plan not found');
     if (plan.priceAmount <= 0) {
       throw new BadRequestError('This plan is free — switch to it directly');
     }
 
+    // Re-price server-side on every checkout — a coupon quote shown in the UI
+    // is never trusted, and it may have expired or run out since then.
+    const quote = couponCode
+      ? await couponService.quote({ code: couponCode, plan, workspaceId: user.workspaceId })
+      : null;
+
+    // A discount that covers the whole price leaves nothing to collect, so the
+    // plan is activated straight away instead of opening an empty checkout.
+    if (quote && quote.finalAmount === 0) {
+      const subscription = await this.activateWithFullDiscount(user, plan, quote);
+      return {
+        free: true,
+        planName: plan.name,
+        currency: quote.currency,
+        discount: quote,
+        subscription,
+      };
+    }
+
     const order = await paymentService.createOrder({
-      amount: plan.priceAmount,
+      amount: quote ? quote.finalAmount : plan.priceAmount,
       currency: plan.currency || 'INR',
       // Receipt must be <= 40 chars for Razorpay.
       receipt: `ws-${user.workspaceId.slice(-12)}-${Date.now().toString(36)}`,
@@ -670,10 +709,43 @@ class SubscriptionService {
         workspaceId: user.workspaceId,
         planId: plan._id.toString(),
         email: user.email,
+        ...(quote ? { coupon: quote.code } : {}),
       },
     });
 
-    return { ...order, keyId: paymentService.keyId, planName: plan.name };
+    return {
+      ...order,
+      keyId: paymentService.keyId,
+      planName: plan.name,
+      ...(quote ? { discount: quote } : {}),
+    };
+  }
+
+  /**
+   * Activate a plan whose price a coupon covered entirely. The redemption is
+   * written FIRST: its unique (coupon, workspace) index is what stops two
+   * simultaneous requests from both claiming a single-use code.
+   */
+  private async activateWithFullDiscount(
+    user: AuthUser,
+    plan: IPlan,
+    quote: CouponQuote
+  ): Promise<ISubscription> {
+    const claimed = await couponService.redeem({
+      quote,
+      workspaceId: user.workspaceId,
+      planId: plan._id,
+    });
+    if (!claimed) throw new BadRequestError('You have already used this coupon.');
+
+    return this.recordPaidActivation({
+      workspaceId: user.workspaceId,
+      plan,
+      chargedAmount: 0,
+      coupon: quote,
+      couponAlreadyRedeemed: true,
+      actor: { userId: user.id, email: user.email },
+    });
   }
 
   /**
@@ -699,11 +771,36 @@ class SubscriptionService {
       params.razorpaySignature
     );
 
+    // Read the order back from Razorpay for what was ACTUALLY charged and which
+    // coupon (if any) produced that price — the client is never the source of
+    // truth for money. A read failure must not block an activation the customer
+    // already paid for, so it falls back to the plan's list price.
+    let chargedAmount: number | undefined;
+    let couponCode: string | undefined;
+    try {
+      const order = await paymentService.fetchOrder(params.razorpayOrderId);
+      chargedAmount = order.amount;
+      couponCode = order.notes.coupon;
+    } catch (error) {
+      logger.error('Could not read the Razorpay order at activation', {
+        orderId: params.razorpayOrderId,
+        error: (error as Error).message,
+      });
+    }
+
+    const coupon = await couponService.quoteForActivation({
+      code: couponCode,
+      plan,
+      workspaceId: user.workspaceId,
+    });
+
     return this.recordPaidActivation({
       workspaceId: user.workspaceId,
       plan,
       razorpayOrderId: params.razorpayOrderId,
       razorpayPaymentId: params.razorpayPaymentId,
+      chargedAmount,
+      coupon,
       actor: { userId: user.id, email: user.email },
     });
   }
@@ -718,12 +815,19 @@ class SubscriptionService {
     workspaceId: string;
     plan: IPlan;
     razorpayOrderId?: string;
-    razorpayPaymentId: string;
+    /** Absent only for a coupon that covered the full price (no gateway charge). */
+    razorpayPaymentId?: string;
     /** Set on auto-renewing plans so future cycles can be matched back. */
     razorpaySubscriptionId?: string;
     /** Cycle window from Razorpay on a renewal; defaults to "now + interval". */
     periodStart?: Date;
     periodEnd?: Date;
+    /** What was really collected — below list price when a coupon applied. */
+    chargedAmount?: number;
+    /** The one-time discount that produced `chargedAmount`, if any. */
+    coupon?: CouponQuote | null;
+    /** Set when the caller already claimed the redemption (full-discount path). */
+    couponAlreadyRedeemed?: boolean;
     actor?: { userId?: string; email?: string };
   }): Promise<ISubscription> {
     const { workspaceId, plan } = params;
@@ -733,10 +837,14 @@ class SubscriptionService {
       (await subscriptionRepository.findOne({ workspace: workspaceId }))!;
 
     // Fast path for the common replay (webhook arriving after client verify ran).
-    const already = await paymentRepository.findOne({
-      providerPaymentId: params.razorpayPaymentId,
-    });
-    if (already) return currentSubscription();
+    // A fully-discounted activation has no gateway payment id; its replay guard
+    // is the unique coupon redemption the caller claimed first.
+    if (params.razorpayPaymentId) {
+      const already = await paymentRepository.findOne({
+        providerPaymentId: params.razorpayPaymentId,
+      });
+      if (already) return currentSubscription();
+    }
 
     const now = new Date();
     // Razorpay tells us the exact cycle window on a renewal; fall back to our
@@ -746,25 +854,44 @@ class SubscriptionService {
 
     // Create the payment FIRST so the unique providerPaymentId index rejects a
     // concurrent duplicate (client-verify + webhook race) before we do the rest.
+    const currency = plan.currency || 'INR';
+    const amountPaid = params.chargedAmount ?? plan.priceAmount;
     let payment;
     try {
       payment = await paymentRepository.create({
         workspace: new Types.ObjectId(workspaceId),
         app: env.APP_ID,
         plan: plan._id,
-        amount: plan.priceAmount,
-        currency: plan.currency || 'INR',
+        amount: amountPaid,
+        currency,
         status: PaymentStatus.SUCCEEDED,
-        provider: 'razorpay',
+        provider: params.razorpayPaymentId ? 'razorpay' : 'coupon',
         providerPaymentId: params.razorpayPaymentId,
         providerOrderId: params.razorpayOrderId,
-        method: 'razorpay',
+        method: params.razorpayPaymentId ? 'razorpay' : 'coupon',
         paidAt: now,
       });
     } catch (error) {
       // Duplicate key ⇒ the other path won the race and already recorded it.
       if ((error as { code?: number }).code === 11000) return currentSubscription();
       throw error;
+    }
+
+    // Claim the coupon now that a real payment exists. A false result means a
+    // concurrent checkout already claimed it — the payment still stands, we
+    // just do not count the discount twice.
+    if (params.coupon && !params.couponAlreadyRedeemed) {
+      await couponService.redeem({
+        quote: params.coupon,
+        workspaceId,
+        planId: plan._id,
+        paymentId: payment._id,
+      });
+    } else if (params.coupon && params.couponAlreadyRedeemed) {
+      await couponRedemptionRepository.updateOne(
+        { coupon: new Types.ObjectId(params.coupon.couponId), workspace: workspaceId },
+        { $set: { payment: payment._id } }
+      );
     }
 
     const subscription = await subscriptionRepository.updateOne(
@@ -795,10 +922,23 @@ class SubscriptionService {
       subscription: subscription?._id,
       number: `INV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${payment._id.toString().slice(-6).toUpperCase()}`,
       status: InvoiceStatus.PAID,
-      amountDue: plan.priceAmount,
-      amountPaid: plan.priceAmount,
-      currency: plan.currency || 'INR',
-      lineItems: [{ description: `${plan.name} plan`, quantity: 1, unitAmount: plan.priceAmount }],
+      amountDue: amountPaid,
+      amountPaid,
+      currency,
+      lineItems: [
+        { description: `${plan.name} plan`, quantity: 1, unitAmount: plan.priceAmount },
+        // Negative line so the invoice still shows the list price and what the
+        // coupon took off, and the two add up to what was charged.
+        ...(params.coupon
+          ? [
+              {
+                description: `Coupon ${params.coupon.code}`,
+                quantity: 1,
+                unitAmount: -params.coupon.discountAmount,
+              },
+            ]
+          : []),
+      ],
       periodStart: now,
       periodEnd,
       paidAt: now,
@@ -808,7 +948,9 @@ class SubscriptionService {
       workspace: workspaceId,
       user: params.actor?.userId,
       action: ActivityAction.ADMIN_SUBSCRIPTION_UPDATED,
-      description: `${params.actor?.email ?? 'Payment'} activated the ${plan.name} plan via Razorpay (${params.razorpayPaymentId})`,
+      description: params.razorpayPaymentId
+        ? `${params.actor?.email ?? 'Payment'} activated the ${plan.name} plan via Razorpay (${params.razorpayPaymentId})${params.coupon ? ` with coupon ${params.coupon.code}` : ''}`
+        : `${params.actor?.email ?? 'A customer'} activated the ${plan.name} plan with coupon ${params.coupon?.code} (no payment due)`,
       entityType: 'Subscription',
     });
 
@@ -829,6 +971,7 @@ class SubscriptionService {
           id?: string;
           order_id?: string;
           invoice_id?: string;
+          amount?: number;
           notes?: Record<string, string>;
         };
       };
@@ -882,11 +1025,22 @@ class SubscriptionService {
       return;
     }
 
+    // Razorpay copies the order's notes onto the payment, so a coupon checkout
+    // is still recognisable here — the webhook is the path that runs when the
+    // browser closed before client verify.
+    const coupon = await couponService.quoteForActivation({
+      code: notes.coupon,
+      plan,
+      workspaceId,
+    });
+
     await this.recordPaidActivation({
       workspaceId,
       plan,
       razorpayOrderId: entity.order_id,
       razorpayPaymentId: entity.id,
+      chargedAmount: typeof entity.amount === 'number' ? entity.amount : undefined,
+      coupon,
     });
     logger.info('Razorpay webhook activated plan', { workspaceId, planId, paymentId: entity.id });
   }
