@@ -79,6 +79,13 @@ export abstract class BaseRepository<T extends Document> {
     return this.model.findOneAndUpdate(filter, update, options).exec();
   }
 
+  updateMany(filter: FilterQuery<T>, update: UpdateQuery<T>): Promise<number> {
+    return this.model
+      .updateMany(filter, update)
+      .exec()
+      .then((res) => res.modifiedCount ?? 0);
+  }
+
   deleteById(id: string | Types.ObjectId): Promise<T | null> {
     return this.model.findByIdAndDelete(id).exec();
   }

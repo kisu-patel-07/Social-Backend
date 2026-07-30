@@ -72,6 +72,27 @@ export const adminController = {
     sendSuccess(res, detail);
   }),
 
+  createUser: asyncHandler(async (req: Request, res: Response) => {
+    const user = await adminService.createUser(req.user!, req.body);
+    sendCreated(res, user, 'User created — a set-password email is on its way to them');
+  }),
+
+  bulkUpdateUsers: asyncHandler(async (req: Request, res: Response) => {
+    const result = await adminService.bulkUpdateUsers(req.user!, req.body.ids, req.body.action);
+    sendSuccess(
+      res,
+      result,
+      result.skipped > 0
+        ? `${result.affected} user(s) updated, ${result.skipped} protected account(s) skipped`
+        : `${result.affected} user(s) updated`
+    );
+  }),
+
+  getWorkspaceDetail: asyncHandler(async (req: Request, res: Response) => {
+    const detail = await adminService.getWorkspaceDetail(req.params.id);
+    sendSuccess(res, detail);
+  }),
+
   suspendUser: asyncHandler(async (req: Request, res: Response) => {
     const user = await adminService.setUserSuspended(req.user!, req.params.id, req.body.suspended);
     sendSuccess(res, user, req.body.suspended ? 'User suspended' : 'User unsuspended');
@@ -265,8 +286,12 @@ export const adminController = {
   }),
 
   // ---- Users CSV export ----------------------------------------------------------------
-  exportUsersCsv: asyncHandler(async (_req: Request, res: Response) => {
-    const csv = await adminService.exportUsersCsv();
+  exportUsersCsv: asyncHandler(async (req: Request, res: Response) => {
+    const csv = await adminService.exportUsersCsv({
+      search: req.query.search as string | undefined,
+      verified: req.query.verified === undefined ? undefined : req.query.verified === 'true',
+      suspended: req.query.suspended === undefined ? undefined : req.query.suspended === 'true',
+    });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
       'Content-Disposition',

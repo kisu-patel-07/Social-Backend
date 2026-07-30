@@ -1,6 +1,8 @@
+import crypto from 'crypto';
 import { FilterQuery, PipelineStage, Types } from 'mongoose';
 import {
   ActivityAction,
+  AuthProvider,
   AutomationStatus,
   BillingInterval,
   ContactMessageStatus,
@@ -11,6 +13,7 @@ import {
   Platform,
   StudioAutomationStatus,
   SubscriptionStatus,
+  UserRole,
 } from '../constants';
 import { IContactMessage } from '../models/contactMessage.model';
 import { IActivityLog } from '../models/activityLog.model';
@@ -30,6 +33,7 @@ import { paymentService } from './payment.service';
 import { planPeriodEnd } from './subscription.service';
 import { signAccessToken } from '../utils/jwt';
 import { buildTotpUri, generateTotpSecret, totpQrDataUrl, verifyTotpCode } from '../utils/totp';
+import { hashPassword } from '../utils/password';
 import { CsvColumn, toCsv } from '../utils/csv';
 import { toDateKey } from '../utils/date';
 import { containsRegex } from '../utils/text';
@@ -228,6 +232,20 @@ export interface AdminAnalytics {
   funnel: Array<{ step: string; count: number }>;
 }
 
+/** Everything the admin workspace drill-in page needs in one request. */
+export interface AdminWorkspaceDetail {
+  workspace: IWorkspace;
+  members: IUser[];
+  accounts: ISocialAccount[];
+  subscription: ISubscription | null;
+  usage: {
+    automations: number;
+    studioAutomations: number;
+    leads: number;
+    messages30d: number;
+  };
+}
+
 /** A row in the admin workspaces directory. */
 export interface AdminWorkspaceRow {
   _id: Types.ObjectId;
@@ -395,7 +413,12 @@ class AdminService {
 
   // ---- Users ----------------------------------------------------------------
 
-  listUsers(filters: AdminUserFilters): Promise<PaginatedResult<IUser>> {
+  /** Shared filter builder for the users list and the filtered CSV export. */
+  private buildUserFilter(filters: {
+    search?: string;
+    verified?: boolean;
+    suspended?: boolean;
+  }): FilterQuery<IUser> {
     const query: FilterQuery<IUser> = {};
     if (filters.verified !== undefined) query.isEmailVerified = filters.verified;
     if (filters.suspended !== undefined) query.isSuspended = filters.suspended;
@@ -405,9 +428,133 @@ class AdminService {
         { email: containsRegex(filters.search) },
       ];
     }
-    return userRepository.paginate(query, filters, undefined, [
+    return query;
+  }
+
+  listUsers(filters: AdminUserFilters): Promise<PaginatedResult<IUser>> {
+    return userRepository.paginate(this.buildUserFilter(filters), filters, undefined, [
       { path: 'workspace', select: 'name' },
     ]);
+  }
+
+  /**
+   * Apply one action to many users at once. Guarded per user: nobody can bulk-
+   * suspend themselves or a super admin — those rows are skipped and counted,
+   * not errors, so one protected row doesn't abort the whole batch.
+   */
+  async bulkUpdateUsers(
+    actor: AuthUser,
+    ids: string[],
+    action: 'suspend' | 'unsuspend' | 'verify'
+  ): Promise<{ affected: number; skipped: number }> {
+    const users = await userRepository.find({ _id: { $in: ids } }, '_id isSuperAdmin');
+    const eligible = users.filter(
+      (u) => !(action === 'suspend' && (u.isSuperAdmin || u._id.toString() === actor.id))
+    );
+    const skipped = ids.length - eligible.length;
+    const eligibleIds = eligible.map((u) => u._id);
+
+    if (eligibleIds.length > 0) {
+      if (action === 'suspend') {
+        await userRepository.updateMany(
+          { _id: { $in: eligibleIds } },
+          {
+            $set: { isSuspended: true, suspendedAt: new Date() },
+            // Invalidate refresh tokens issued before the suspension.
+            $inc: { tokenVersion: 1 },
+          }
+        );
+      } else if (action === 'unsuspend') {
+        await userRepository.updateMany(
+          { _id: { $in: eligibleIds } },
+          { $set: { isSuspended: false }, $unset: { suspendedAt: '' } }
+        );
+      } else {
+        await userRepository.updateMany(
+          { _id: { $in: eligibleIds } },
+          {
+            $set: { isEmailVerified: true },
+            $unset: { emailOtpHash: '', emailOtpExpiresAt: '', emailOtpAttempts: '' },
+          }
+        );
+      }
+    }
+
+    await activityService.log({
+      workspace: actor.workspaceId,
+      user: actor.id,
+      action: ActivityAction.ADMIN_USERS_BULK_UPDATED,
+      description: `${actor.email} bulk-${action}ed ${eligibleIds.length} user(s)${skipped ? ` (${skipped} skipped)` : ''}`,
+      metadata: { action, affected: eligibleIds.length, skipped },
+    });
+
+    return { affected: eligibleIds.length, skipped };
+  }
+
+  /**
+   * Manually onboard a customer: verified user + workspace, an optional plan
+   * granted immediately (admin power — paid plans allowed without payment),
+   * and a set-your-password email so no credential ever travels by chat.
+   */
+  async createUser(
+    actor: AuthUser,
+    params: { name: string; email: string; planId?: string }
+  ): Promise<IUser> {
+    const email = params.email.toLowerCase().trim();
+    const existing = await userRepository.findByEmail(email);
+    if (existing) throw new ConflictError('An account with this email already exists');
+
+    let plan: IPlan | null = null;
+    if (params.planId) {
+      plan = await planRepository.findById(params.planId);
+      if (!plan || !plan.isActive) throw new NotFoundError('Plan not found');
+    }
+
+    // Same ordering as signup: pre-generate the user id so the workspace can
+    // reference its owner before the user document exists.
+    const userId = new Types.ObjectId();
+    const workspace = await workspaceRepository.create({
+      name: `${params.name}'s Workspace`,
+      owner: userId,
+    });
+    // Random throwaway password — the user sets their real one via the email.
+    const passwordHash = await hashPassword(crypto.randomBytes(24).toString('base64url'));
+    const user = await userRepository.create({
+      _id: userId,
+      name: params.name,
+      email,
+      password: passwordHash,
+      workspace: workspace._id,
+      role: UserRole.OWNER,
+      authProviders: [AuthProvider.LOCAL],
+      isEmailVerified: true,
+    });
+
+    if (plan) {
+      const now = new Date();
+      await subscriptionRepository.create({
+        workspace: workspace._id,
+        plan: plan._id,
+        status: SubscriptionStatus.ACTIVE,
+        currentPeriodStart: now,
+        currentPeriodEnd:
+          plan.priceAmount > 0 ? planPeriodEnd(plan, now) : addDays(now, 3650),
+      });
+    }
+
+    // Set-password email (the normal reset flow); best-effort.
+    await authService.forgotPassword(email);
+
+    await activityService.log({
+      workspace: workspace._id.toString(),
+      user: actor.id,
+      action: ActivityAction.ADMIN_USER_CREATED,
+      description: `${actor.email} created user ${email}${plan ? ` on the ${plan.name} plan` : ' (no plan)'}`,
+      entityType: 'User',
+      entityId: user._id,
+    });
+
+    return user;
   }
 
   async getUserDetail(id: string): Promise<AdminUserDetail> {
@@ -1666,6 +1813,34 @@ class AdminService {
 
   // ---- Workspaces directory -------------------------------------------------------
 
+  /** Drill-in for one workspace: members, accounts, plan and usage at a glance. */
+  async getWorkspaceDetail(id: string): Promise<AdminWorkspaceDetail> {
+    const workspace = await workspaceRepository.findById(id);
+    if (!workspace) throw new NotFoundError('Workspace not found');
+
+    const days30 = new Date(Date.now() - 30 * DAY_MS);
+    const [members, accounts, subscription, automations, studioAutomations, leads, messages30d] =
+      await Promise.all([
+        userRepository.find({ workspace: workspace._id }, undefined, { sort: { createdAt: 1 } }),
+        socialAccountRepository.find({ workspace: workspace._id }, undefined, {
+          sort: { createdAt: 1 },
+        }),
+        subscriptionRepository.findByWorkspace(id),
+        automationRepository.count({ workspace: workspace._id }),
+        studioAutomationRepository.count({ workspace: workspace._id }),
+        leadRepository.count({ workspace: workspace._id }),
+        messageRepository.count({ workspace: workspace._id, createdAt: { $gte: days30 } }),
+      ]);
+
+    return {
+      workspace,
+      members,
+      accounts,
+      subscription,
+      usage: { automations, studioAutomations, leads, messages30d },
+    };
+  }
+
   async listWorkspaces(
     filters: PaginationOptions & { search?: string }
   ): Promise<{ items: AdminWorkspaceRow[]; meta: ReturnType<typeof buildPaginationMeta> }> {
@@ -1778,8 +1953,14 @@ class AdminService {
 
   // ---- Users CSV export ----------------------------------------------------------------
 
-  async exportUsersCsv(): Promise<string> {
-    const users = await userRepository.find({}, undefined, {
+  async exportUsersCsv(filters: {
+    search?: string;
+    verified?: boolean;
+    suspended?: boolean;
+  } = {}): Promise<string> {
+    // Honors the same filters as the users list, so "export what I'm looking at"
+    // exports exactly that segment.
+    const users = await userRepository.find(this.buildUserFilter(filters), undefined, {
       sort: { createdAt: -1 },
       limit: 20000,
       populate: { path: 'workspace', select: 'name' },

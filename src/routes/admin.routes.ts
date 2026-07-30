@@ -8,7 +8,9 @@ import {
   adminAutomationStatusSchema,
   adminBannerSchema,
   adminBroadcastSchema,
+  adminBulkUsersSchema,
   adminCreatePlanSchema,
+  adminCreateUserSchema,
   adminGrantBonusSchema,
   adminListActivitySchema,
   adminListDemoRequestsSchema,
@@ -42,6 +44,9 @@ router.get('/overview', adminController.overview);
 
 // User management
 router.get('/users', validate(adminListUsersSchema), adminController.listUsers);
+router.post('/users', validate(adminCreateUserSchema), adminController.createUser);
+// Registered before /users/:id so "bulk" is never captured as an id.
+router.post('/users/bulk', validate(adminBulkUsersSchema), adminController.bulkUpdateUsers);
 router.get('/users/:id', validate(z.object({ params: idParamSchema })), adminController.getUser);
 router.post(
   '/users/:id/impersonate',
@@ -154,6 +159,11 @@ router.get(
   '/workspaces-directory',
   validate(adminListWorkspacesSchema),
   adminController.listWorkspacesDirectory
+);
+router.get(
+  '/workspaces-directory/:id',
+  validate(z.object({ params: idParamSchema })),
+  adminController.getWorkspaceDetail
 );
 
 // Internal notes on a user

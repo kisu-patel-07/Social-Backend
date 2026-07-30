@@ -233,6 +233,23 @@ export const adminBroadcastSchema = z.object({
   }),
 });
 
+/** POST /admin/users/bulk */
+export const adminBulkUsersSchema = z.object({
+  body: z.object({
+    ids: z.array(objectIdSchema).min(1).max(200),
+    action: z.enum(['suspend', 'unsuspend', 'verify']),
+  }),
+});
+
+/** POST /admin/users */
+export const adminCreateUserSchema = z.object({
+  body: z.object({
+    name: z.string().trim().min(2).max(120),
+    email: z.string().trim().email().max(254),
+    planId: objectIdSchema.optional(),
+  }),
+});
+
 /** PATCH /admin/support/:id */
 export const adminSupportUpdateSchema = z.object({
   params: z.object({ id: objectIdSchema }),

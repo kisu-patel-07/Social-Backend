@@ -209,6 +209,8 @@ export enum ActivityAction {
   ADMIN_SUPPORT_UPDATED = 'admin.support_updated',
   ADMIN_PASSWORD_RESET_SENT = 'admin.password_reset_sent',
   ADMIN_WEBHOOK_REPROCESSED = 'admin.webhook_reprocessed',
+  ADMIN_USER_CREATED = 'admin.user_created',
+  ADMIN_USERS_BULK_UPDATED = 'admin.users_bulk_updated',
   ADMIN_BONUS_GRANTED = 'admin.bonus_granted',
   ADMIN_BONUS_REMOVED = 'admin.bonus_removed',
 }
