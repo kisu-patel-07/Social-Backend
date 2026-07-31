@@ -119,6 +119,18 @@ async function checkPageSubscribedApps(name: string, pageId: string, token: stri
       if (app.id === env.META_APP_ID) {
         if (fields.includes('feed')) ok('`feed` subscribed at page level.');
         else fail('`feed` NOT in page-level subscribed_fields — re-run subscribe-webhook.');
+        if (fields.includes('messages')) ok('`messages` subscribed at page level.');
+        else fail('`messages` NOT subscribed — DM-triggered automations will never fire.');
+        // Flow gates ("I'm following ✅", "Send me the link") advance only on
+        // messaging_postbacks. Accounts connected before this field was added
+        // to the subscribe call still lack it — reconnect the account to fix.
+        if (fields.includes('messaging_postbacks'))
+          ok('`messaging_postbacks` subscribed at page level.');
+        else
+          fail(
+            '`messaging_postbacks` NOT subscribed — flow buttons (follow gate, ' +
+              '"get the link") will never advance. Reconnect the account.'
+          );
       }
     }
   } catch (error) {

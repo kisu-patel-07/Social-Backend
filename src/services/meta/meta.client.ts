@@ -274,7 +274,7 @@ class MetaClient {
     pageId: string,
     recipient: { comment_id: string } | { id: string },
     text: string,
-    buttons: Array<{ title: string; payload: string }>,
+    buttons: Array<{ title: string; payload: string } | { title: string; url: string }>,
     pageAccessToken: string
   ): Promise<{ id?: string; message_id?: string }> {
     try {
@@ -288,11 +288,13 @@ class MetaClient {
               payload: {
                 template_type: 'button',
                 text,
-                buttons: buttons.map((b) => ({
-                  type: 'postback',
-                  title: b.title,
-                  payload: b.payload,
-                })),
+                // A gate can mix a link out ("Visit profile") with the postback
+                // that advances the flow ("I'm following ✅").
+                buttons: buttons.map((b) =>
+                  'url' in b
+                    ? { type: 'web_url', url: b.url, title: b.title }
+                    : { type: 'postback', title: b.title, payload: b.payload }
+                ),
               },
             },
           },
@@ -461,6 +463,49 @@ class MetaClient {
         ? (error as AxiosError).response?.data
         : (error as Error)?.message;
       logger.warn('Could not fetch sender profile for inbox display', { userId, detail });
+      return null;
+    }
+  }
+
+  /**
+   * Does this Instagram user actually follow the connected business account?
+   *
+   * The Instagram User Profile API exposes `is_user_follow_business` for any
+   * IGSID that has messaged the business — which is exactly the case inside a
+   * comment-to-DM flow. This is what makes a follow gate enforceable instead of
+   * honour-system: a tapped "I'm following ✅" can be checked against reality.
+   *
+   * Returns null when the answer can't be obtained (Facebook, missing Advanced
+   * Access for the field, revoked token) so callers can fall back to trusting
+   * the tap rather than dead-ending the user.
+   *
+   * Docs: https://developers.facebook.com/docs/messenger-platform/instagram/features/user-profile
+   */
+  async isFollower(
+    igUserId: string,
+    pageAccessToken: string,
+    platform: string
+  ): Promise<boolean | null> {
+    if (platform !== 'instagram') return null;
+    try {
+      const { data } = await this.http.get<{ is_user_follow_business?: boolean }>(`/${igUserId}`, {
+        params: {
+          access_token: pageAccessToken,
+          appsecret_proof: this.appSecretProof(pageAccessToken),
+          fields: 'is_user_follow_business',
+        },
+      });
+      return typeof data.is_user_follow_business === 'boolean'
+        ? data.is_user_follow_business
+        : null;
+    } catch (error) {
+      const detail = axios.isAxiosError(error)
+        ? (error as AxiosError).response?.data
+        : (error as Error)?.message;
+      logger.warn('Follow check unavailable — falling back to trusting the tap', {
+        igUserId,
+        detail,
+      });
       return null;
     }
   }

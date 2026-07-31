@@ -20,6 +20,8 @@ export interface IFlowRun extends Document {
   step: FlowStep;
   /** Captured during the ask-email step. */
   email?: string;
+  /** How many times the follow gate has been asked (re-asked on a false claim). */
+  followAsks?: number;
   /** Per-run tracked-link slug, so this exact user's click can be attributed. */
   linkTrackingSlug?: string;
   linkSentAt?: Date;
@@ -42,6 +44,7 @@ const flowRunSchema = new Schema<IFlowRun>(
     participantId: { type: String, required: true },
     step: { type: String, enum: Object.values(FlowStep), required: true },
     email: { type: String },
+    followAsks: { type: Number, default: 0 },
     linkTrackingSlug: { type: String, index: true },
     linkSentAt: { type: Date },
     linkClicked: { type: Boolean, default: false },

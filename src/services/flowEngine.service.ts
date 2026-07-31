@@ -26,6 +26,10 @@ const DEFAULT_FOLLOW_MSG = 'Follow us first, then tap below to get your link �
 const DEFAULT_EMAIL_MSG = "What's the best email to send this to? 📧";
 const DEFAULT_OPENING_MSG = "Tap below and I'll send it right over 👇";
 const DEFAULT_FOLLOWUP_MSG = 'Just checking in — did you grab the link? 😊';
+const NOT_FOLLOWING_MSG =
+  "Hmm, it looks like you're not following yet 🙈 Tap the profile below, hit Follow, then tap “I'm following ✅” again.";
+/** Stop re-asking after this many failed follow checks (anti-spam). */
+const MAX_FOLLOW_ASKS = 3;
 
 type Recipient = { comment_id: string } | { id: string };
 
@@ -168,7 +172,14 @@ class FlowEngineService {
         account.pageId!,
         recipient,
         text,
-        [{ title: buttonTitle, payload: this.buildPayload(run._id.toString(), action) }],
+        [
+          // A one-tap way to reach the profile makes the follow gate actionable
+          // without leaving the thread.
+          ...(action === 'follow' && account.username
+            ? [{ title: 'Visit profile', url: `https://instagram.com/${account.username}` }]
+            : []),
+          { title: buttonTitle, payload: this.buildPayload(run._id.toString(), action) },
+        ],
         account.accessToken
       );
       await messageRepository.updateById(msg._id, { status: MessageStatus.SENT });
@@ -189,11 +200,37 @@ class FlowEngineService {
     account: ISocialAccount,
     automation: IStudioAutomation,
     run: IFlowRun,
-    recipient: Recipient
+    recipient: Recipient,
+    /** Second and later asks — they tapped "I'm following" but don't. */
+    reAsk = false
   ): Promise<boolean> {
-    await this.setStep(run._id, { step: FlowStep.AWAIT_FOLLOW });
-    const text = automation.flow?.followMessage || DEFAULT_FOLLOW_MSG;
+    await this.setStep(run._id, {
+      step: FlowStep.AWAIT_FOLLOW,
+      ...(reAsk ? { followAsks: (run.followAsks ?? 1) + 1 } : { followAsks: 1 }),
+    });
+    const text = reAsk
+      ? NOT_FOLLOWING_MSG
+      : automation.flow?.followMessage || DEFAULT_FOLLOW_MSG;
     return this.sendPostback(account, run, recipient, text, DEFAULT_FOLLOW_BUTTON, 'follow');
+  }
+
+  /**
+   * Gate check on a tapped "I'm following ✅".
+   *
+   * `true`  — verified follower, or the check is unavailable (Facebook, or the
+   *           field needs Advanced Access): trust the tap rather than trapping
+   *           a genuine follower behind a check we can't run.
+   * `false` — Instagram says they don't follow: ask again.
+   */
+  private async passesFollowCheck(account: ISocialAccount, run: IFlowRun): Promise<boolean> {
+    const following = await metaClient.isFollower(
+      run.participantId,
+      account.accessToken,
+      run.platform
+    );
+    if (following === null) return true;
+    logger.info('Flow follow check', { participantId: run.participantId, following });
+    return following;
   }
 
   private async sendEmailAsk(
@@ -285,7 +322,13 @@ class FlowEngineService {
           linkClicked: false,
           expiresAt: addDays(now, FLOW_RUN_TTL_DAYS),
         },
-        $unset: { email: '', linkTrackingSlug: '', linkSentAt: '', followUpSentAt: '' },
+        $unset: {
+          email: '',
+          linkTrackingSlug: '',
+          linkSentAt: '',
+          followUpSentAt: '',
+          followAsks: '',
+        },
       },
       { new: true, upsert: true }
     ).exec();
@@ -294,7 +337,11 @@ class FlowEngineService {
     if (!run || !f) return false;
     const recipient: Recipient = { comment_id: comment.commentId };
     // First pending gate, in order: follow → email → click → link.
-    if (f.requireFollow) return this.sendFollowGate(account, automation, run, recipient);
+    // Existing followers skip the gate entirely — asking someone to follow when
+    // they already do is the fastest way to look broken.
+    if (f.requireFollow && !(await this.passesFollowCheck(account, run))) {
+      return this.sendFollowGate(account, automation, run, recipient);
+    }
     if (f.askEmail) return this.sendEmailAsk(account, automation, run, recipient);
     if (f.deliverOnClick) return this.sendOpening(account, automation, run, recipient);
     return this.deliverLink(account, automation, run, recipient);
@@ -312,6 +359,16 @@ class FlowEngineService {
     const recipient: Recipient = { id: postback.fromId };
 
     if (parsed.action === 'follow' && run.step === FlowStep.AWAIT_FOLLOW) {
+      // Verify the claim before unlocking — a tap is not a follow.
+      if (!(await this.passesFollowCheck(account, run))) {
+        if ((run.followAsks ?? 1) >= MAX_FOLLOW_ASKS) {
+          logger.info('Flow follow gate: re-ask limit reached, staying silent', {
+            participantId: run.participantId,
+          });
+          return false;
+        }
+        return this.sendFollowGate(account, automation, run, recipient, true);
+      }
       if (f.askEmail && !run.email) return this.sendEmailAsk(account, automation, run, recipient);
       if (f.deliverOnClick) return this.sendOpening(account, automation, run, recipient);
       return this.deliverLink(account, automation, run, recipient);

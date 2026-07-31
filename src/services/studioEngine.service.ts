@@ -384,6 +384,14 @@ class StudioEngineService {
         url: await linkTrackingService.wrapUrl(linkSource, b.url),
       }))
     );
+    // Buttons ride along as a button template (Instagram renders these on a
+    // private reply). If Meta rejects the template for any reason, the send is
+    // retried as plain text with the links appended — a DM that arrives without
+    // its link is the one outcome worth engineering against.
+    const useButtonTemplate = buttons.length > 0;
+    const linkLines = buttons.length
+      ? '\n\n' + buttons.map((b) => `${b.title}: ${b.url}`).join('\n')
+      : '';
     // Idempotent claim so a webhook retry never sends the commenter a second DM.
     const { message: dm, alreadySent } = await messageRepository.claimSend(
       `sdm:${account._id}:${comment.commentId}:${automation._id}`,
@@ -403,19 +411,43 @@ class StudioEngineService {
     );
     if (alreadySent) return true;
     try {
-      await metaClient.sendPrivateReplyWithButtons(
-        account.pageId!,
-        comment.commentId,
-        dm.text,
-        buttons,
-        account.accessToken
-      );
+      if (useButtonTemplate) {
+        try {
+          await metaClient.sendPrivateReplyWithButtons(
+            account.pageId!,
+            comment.commentId,
+            dm.text,
+            buttons,
+            account.accessToken
+          );
+        } catch (templateError) {
+          logger.warn('Button template rejected — resending DM with inline links', {
+            commentId: comment.commentId,
+            error: (templateError as Error).message,
+          });
+          await metaClient.sendPrivateReply(
+            account.pageId!,
+            comment.commentId,
+            dm.text + linkLines,
+            account.accessToken
+          );
+          await messageRepository.updateById(dm._id, { text: dm.text + linkLines });
+        }
+      } else {
+        await metaClient.sendPrivateReply(
+          account.pageId!,
+          comment.commentId,
+          dm.text,
+          account.accessToken
+        );
+      }
       await messageRepository.updateById(dm._id, { status: MessageStatus.SENT });
       await analyticsService.track(account.workspace.toString(), 'dmSent', comment.platform);
       logger.info('Studio private DM sent', {
         commentId: comment.commentId,
         toId: comment.fromId,
         buttons: automation.dmButtons.length,
+        delivery: useButtonTemplate ? 'button-template' : 'text-links',
       });
       return true;
     } catch (error) {
