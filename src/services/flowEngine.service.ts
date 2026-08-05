@@ -208,9 +208,7 @@ class FlowEngineService {
       step: FlowStep.AWAIT_FOLLOW,
       ...(reAsk ? { followAsks: (run.followAsks ?? 1) + 1 } : { followAsks: 1 }),
     });
-    const text = reAsk
-      ? NOT_FOLLOWING_MSG
-      : automation.flow?.followMessage || DEFAULT_FOLLOW_MSG;
+    const text = reAsk ? NOT_FOLLOWING_MSG : automation.flow?.followMessage || DEFAULT_FOLLOW_MSG;
     return this.sendPostback(account, run, recipient, text, DEFAULT_FOLLOW_BUTTON, 'follow');
   }
 

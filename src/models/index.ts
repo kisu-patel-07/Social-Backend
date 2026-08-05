@@ -28,9 +28,4 @@ export { FlowRunModel, IFlowRun } from './flowRun.model';
 export { ContactMessageModel, IContactMessage } from './contactMessage.model';
 export { WebhookEventModel, IWebhookEvent } from './webhookEvent.model';
 export { JobRunModel, IJobRun } from './jobRun.model';
-export {
-  CouponModel,
-  ICoupon,
-  CouponRedemptionModel,
-  ICouponRedemption,
-} from './coupon.model';
+export { CouponModel, ICoupon, CouponRedemptionModel, ICouponRedemption } from './coupon.model';

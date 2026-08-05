@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
+import path from 'path';
 import { allowedOrigins, env, isProduction } from './config/env';
 import { httpLogStream } from './config/logger';
 import { apiLimiter } from './middlewares';
@@ -17,7 +18,25 @@ export function createApp(): Application {
   // Behind a proxy (Railway/Render) so rate-limit & secure cookies work.
   app.set('trust proxy', 1);
 
-  app.use(helmet());
+  // Configure helmet to allow Vercel Analytics scripts
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: [
+            "'self'",
+            "'unsafe-inline'",
+            'https://vercel.live',
+            'https://*.vercel-insights.com',
+          ],
+          connectSrc: ["'self'", 'https://*.vercel-insights.com'],
+          imgSrc: ["'self'", 'data:', 'https:'],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+        },
+      },
+    })
+  );
   app.use(
     cors({
       origin: (origin, callback) => {
@@ -53,6 +72,14 @@ export function createApp(): Application {
   } else {
     app.use(morgan('combined', { stream: httpLogStream }));
   }
+
+  // Serve static files from public directory
+  app.use(express.static(path.join(__dirname, '../public')));
+
+  // Status dashboard with Vercel Analytics
+  app.get('/status', (_req: Request, res: Response) => {
+    res.sendFile(path.join(__dirname, '../public/index.html'));
+  });
 
   // Liveness probe at the root.
   app.get('/', (_req: Request, res: Response) => {

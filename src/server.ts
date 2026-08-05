@@ -4,7 +4,9 @@ import { env, loadedEnvFile } from './config/env';
 import { logger } from './config/logger';
 
 async function bootstrap(): Promise<void> {
-  logger.info(`▶ Booting SocialDM backend — environment: ${env.NODE_ENV} (config: ${loadedEnvFile})`);
+  logger.info(
+    `▶ Booting SocialDM backend — environment: ${env.NODE_ENV} (config: ${loadedEnvFile})`
+  );
 
   await connectDatabase();
 
